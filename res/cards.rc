@@ -1,0 +1,69 @@
+#include <windows.h>
+
+CARD_B1  RCDATA "cards_png/B1.png"
+CARD_B2  RCDATA "cards_png/B2.png"
+
+CARD_AH  RCDATA "cards_png/AH.png"
+CARD_AD  RCDATA "cards_png/AD.png"
+CARD_AC  RCDATA "cards_png/AC.png"
+CARD_AS  RCDATA "cards_png/AS.png"
+
+CARD_2H  RCDATA "cards_png/2H.png"
+CARD_2D  RCDATA "cards_png/2D.png"
+CARD_2C  RCDATA "cards_png/2C.png"
+CARD_2S  RCDATA "cards_png/2S.png"
+
+CARD_3H  RCDATA "cards_png/3H.png"
+CARD_3D  RCDATA "cards_png/3D.png"
+CARD_3C  RCDATA "cards_png/3C.png"
+CARD_3S  RCDATA "cards_png/3S.png"
+
+CARD_4H  RCDATA "cards_png/4H.png"
+CARD_4D  RCDATA "cards_png/4D.png"
+CARD_4C  RCDATA "cards_png/4C.png"
+CARD_4S  RCDATA "cards_png/4S.png"
+
+CARD_5H  RCDATA "cards_png/5H.png"
+CARD_5D  RCDATA "cards_png/5D.png"
+CARD_5C  RCDATA "cards_png/5C.png"
+CARD_5S  RCDATA "cards_png/5S.png"
+
+CARD_6H  RCDATA "cards_png/6H.png"
+CARD_6D  RCDATA "cards_png/6D.png"
+CARD_6C  RCDATA "cards_png/6C.png"
+CARD_6S  RCDATA "cards_png/6S.png"
+
+CARD_7H  RCDATA "cards_png/7H.png"
+CARD_7D  RCDATA "cards_png/7D.png"
+CARD_7C  RCDATA "cards_png/7C.png"
+CARD_7S  RCDATA "cards_png/7S.png"
+
+CARD_8H  RCDATA "cards_png/8H.png"
+CARD_8D  RCDATA "cards_png/8D.png"
+CARD_8C  RCDATA "cards_png/8C.png"
+CARD_8S  RCDATA "cards_png/8S.png"
+
+CARD_9H  RCDATA "cards_png/9H.png"
+CARD_9D  RCDATA "cards_png/9D.png"
+CARD_9C  RCDATA "cards_png/9C.png"
+CARD_9S  RCDATA "cards_png/9S.png"
+
+CARD_TH  RCDATA "cards_png/TH.png"
+CARD_TD  RCDATA "cards_png/TD.png"
+CARD_TC  RCDATA "cards_png/TC.png"
+CARD_TS  RCDATA "cards_png/TS.png"
+
+CARD_JH  RCDATA "cards_png/JH.png"
+CARD_JD  RCDATA "cards_png/JD.png"
+CARD_JC  RCDATA "cards_png/JC.png"
+CARD_JS  RCDATA "cards_png/JS.png"
+
+CARD_QH  RCDATA "cards_png/QH.png"
+CARD_QD  RCDATA "cards_png/QD.png"
+CARD_QC  RCDATA "cards_png/QC.png"
+CARD_QS  RCDATA "cards_png/QS.png"
+
+CARD_KH  RCDATA "cards_png/KH.png"
+CARD_KD  RCDATA "cards_png/KD.png"
+CARD_KC  RCDATA "cards_png/KC.png"
+CARD_KS  RCDATA "cards_png/KS.png"

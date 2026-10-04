@@ -1,0 +1,17 @@
+#include <windows.h>
+APPICON ICON "icon.ico"
+
+// UI icons
+IMG_NEW        RCDATA "icons/new.png"
+IMG_HINT       RCDATA "icons/hint.png"
+IMG_USTAWIENIA RCDATA "icons/ustawienia.png"
+IMG_UNDO       RCDATA "icons/undo.png"
+
+// Default sounds, in SOUND_DEFAULTS order (a same-named .wav in the "Sounds" folder next to the exe overrides them)
+SND_0 RCDATA "sounds/nowa.wav"
+SND_1 RCDATA "sounds/click.wav"
+SND_2 RCDATA "sounds/sukces.wav"
+SND_3 RCDATA "sounds/koniec.wav"
+SND_4 RCDATA "sounds/nono.wav"
+SND_5 RCDATA "sounds/Podpowiedz.wav"
+SND_6 RCDATA "sounds/cofnij.wav"
