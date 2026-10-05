@@ -45,7 +45,7 @@ static bool  g_muted=false;
 static int   g_volPct=100;
 // Version of this build. A release on GitHub is tagged vMAJOR.MINOR.PATCH with the same number and carries
 // an asset called Garibaldi.exe: the updater (update.h) compares the tag with this number.
-static const wchar_t* APP_VERSION = L"1.1.0";
+static const wchar_t* APP_VERSION = L"1.1.1";
 static bool  g_checkUpdates=true;     // check GitHub for a newer release at startup
 #if defined(__clang__)
 #pragma clang diagnostic push
