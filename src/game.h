@@ -439,6 +439,20 @@ inline bool aiChoose(const Game& g,int p,const AIContext& ctx,int level,std::mt1
    return found;
 }
 
+// What a click on the card at the top of `src` does for the player (player 0): the best of ALL legal moves.
+// The computer's valuation only ranks them; even a move the computer would never choose is played when it is
+// the only one (the click is the player's decision, and there is Undo). false = no legal move at all
+// (for the turned card the caller then discards it to the waste pile).
+inline bool bestClickMove(const Game& g,int src,Move& out){
+   AIContext none; float best=-1e9f; bool found=false;
+   for(int d=0;d<NP;d++){
+      if(!g.canMove(src,d,0)) continue;
+      float sc=scoreMove(g,{src,d},0,none,2);
+      if(sc>best){ best=sc; out={src,d}; found=true; }
+   }
+   return found;
+}
+
 // One computer action: a move, else turn a card over, else discard / pass.
 inline Step aiStep(Game& g,int p,AIContext& ctx,int level){
    Step s; Move m;

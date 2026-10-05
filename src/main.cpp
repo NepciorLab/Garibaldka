@@ -14,6 +14,7 @@
 #include <mmsystem.h>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 #include "anim.h"
@@ -21,6 +22,7 @@
 #include "card_images_d2d.h"
 #include "renderer_d2d.h"
 #include "sound.h"
+#include "update.h"
 
 // ============================================================================
 // Globals
@@ -39,6 +41,24 @@ static FireworkSystem g_fw;
 static int   g_level=1;            // 0 easy, 1 normal, 2 hard
 static bool  g_muted=false;
 static int   g_volPct=100;
+// Version of this build. A release on GitHub is tagged vMAJOR.MINOR.PATCH with the same number and carries
+// an asset called Garibaldi.exe: the updater (update.h) compares the tag with this number.
+static const wchar_t* APP_VERSION = L"1.0.1";
+static bool  g_checkUpdates=true;     // check GitHub for a newer release at startup
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdate-time"     // the build date is meant to change with every build
+#endif
+static std::wstring buildDateText(){   // "5 października 2026", from the compiler's __DATE__
+   const char* d=__DATE__;
+   static const char* M="JanFebMarAprMayJunJulAugSepOctNovDec";
+   static const wchar_t* PL[12]={L"stycznia",L"lutego",L"marca",L"kwietnia",L"maja",L"czerwca",L"lipca",L"sierpnia",L"września",L"października",L"listopada",L"grudnia"};
+   int mon=0; for(int i=0;i<12;i++) if(strncmp(d,M+i*3,3)==0){ mon=i; break; }
+   return std::to_wstring(atoi(d+4))+L" "+PL[mon]+L" "+std::to_wstring(atoi(d+7));
+}
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 bool isSoundMuted(){ return g_muted; }
 
 static const wchar_t* LEVEL_NAMES[]={L"Łatwy",L"Normalny",L"Trudny"};
@@ -53,7 +73,7 @@ static double nowSec(){
 // ============================================================================
 // Geometry
 // ============================================================================
-struct Geo{ float w=1000,h=700,cw=90,ch=126,gap=10,rg=14,x0=0,yAI=0,yF=0,yT=0,yP=0,tabH=0,fan=30; } G;
+struct Geo{ float w=1000,h=700,cw=90,ch=126,gap=10,rg=14,x0=0,yAI=0,yF=0,yT=0,yP=0,tabH=0,fan=30,fs=40; } G;
 static float slotX(int i){ return G.x0+i*(G.cw+G.gap); }
 static float rowY(int p){ return p==1?G.yAI:G.yP; }
 static void slotPos(int id,float& x,float& y){
@@ -71,12 +91,13 @@ static void computeGeo(float w,float h){
    float availH=h-TB-SB;
    G.gap=std::max(6.f,std::floor(w*0.011f));
    G.rg =std::max(8.f,std::floor(G.gap*1.4f));
-   float cwW=(w-24.f-7*G.gap)/8.f;
+   float cwW=(w-24.f-7*G.gap)/8.55f;                 // 8 columns + room for the flame
    float chH=(availH-3*G.rg-16.f)/5.1f;
    float cw=std::min(std::min(cwW,chH/1.4f),150.f);
    cw=std::max(36.f,std::floor(cw));
    G.cw=cw; G.ch=std::floor(cw*1.4f);
-   G.x0=std::floor((w-(8*G.cw+7*G.gap))/2.f);
+   G.fs=std::floor(G.cw*0.55f);                                 // room left of the magazines for the flame
+   G.x0=std::floor((w-(G.fs+8*G.cw+7*G.gap))/2.f+G.fs);
    G.yAI=TB+8.f;
    G.yP =h-SB-8.f-G.ch;
    G.yF =G.yAI+G.ch+G.rg;
@@ -103,14 +124,15 @@ struct RectF4{ float l,t,r,b; };
 static RectF4 PR[NP];          // hit rectangle of each pile
 
 static std::vector<int> g_dealTops;       // magazine top cards: they land face down and are turned over afterwards (together)
-// Order of the deal: red (computer's) magazine, blue magazine, red columns, blue columns, red hand, blue hand.
+// Order of the deal: red (computer's) magazine, blue magazine, red hand, blue hand, and last the cards on the table
+// (columns): red, blue.
 static double dealDelay(const Card& c,int pileId,int idx){
-   static const int start[6]={0,13,26,30,34,69};
+   static const int start[6]={0,13,26,61,96,100};
    int red=(c.deck==1)?0:1, cat=0, k=0;
    switch(ptype(pileId)){
    case PT_RES:  cat=0+red; k=idx; break;
-   case PT_TAB:  cat=2+red; k=(pileId-8)%4; break;
-   case PT_HAND: cat=4+red; k=idx; break;
+   case PT_HAND: cat=2+red; k=idx; break;
+   case PT_TAB:  cat=4+red; k=(pileId-8)%4; break;
    default: break;
    }
    return (start[cat]+k)*0.012;
@@ -127,6 +149,11 @@ static void relayout(bool snap=false,bool dealing=false){
          v.flip=v.fsrc=v.ftgt=ftgt; v.ft0=0; v.placed=true; return;
       }
       bool moved=std::fabs(tx-v.tx)>0.5f||std::fabs(ty-v.ty)>0.5f;
+      // A card that turns over while its spot shifts by a few pixels (the face-down cards of a stack are offset
+      // by up to 6 px) is NOT a move: it turns over in place - after the card that moved has landed.
+      if(moved && ftgt!=v.ftgt && now>=v.t0+v.dur && std::hypot(tx-v.tx,ty-v.ty)<14.f){
+         v.x=v.sx=v.tx=tx; v.y=v.sy=v.ty=ty; moved=false;
+      }
       double delay=dealing?dealDelay(c,pileId,idx):0.0;
       if(moved){
          v.sx=v.x; v.sy=v.y; v.tx=tx; v.ty=ty;
@@ -257,6 +284,11 @@ static const double REV_STEP=0.75, REV_FLIGHT=0.5;
 // The deal: one pile of both decks -> two piles (red, blue) -> cards fly to magazines, columns, hands -> magazine tops turn over.
 struct DealAnim{ bool active=false; int stage=0; double tSplit=0,tDeal=0,tFlip=0; };
 static DealAnim g_deal;
+// The flame next to a player's magazine shows whose turn it is. It lights up when the starting player is
+// known and moves (ease in-out) to the other player's magazine when the turn changes.
+struct Flame{ bool lit=false; double igniteAt=0, last=0, t0=0, dur=0.65; int player=0; float scale=0, y=0, from=0, to=0; bool moving=false; };
+static Flame g_flame;
+static ID2D1Bitmap* g_flameSpr[8]={};      // soft round sprites, from white-hot yellow to red and to smoke
 static std::wstring g_status; static bool g_statusErr=false; static double g_statusUntil=0;
 static double g_dealUntil=0, g_aiAt=0, g_fwLast=0, g_overAt=0;
 static bool   g_overShown=false, g_dirty=true;
@@ -293,6 +325,7 @@ static void saveSettings(){
    wsprintfW(b,L"%d",g_level); WritePrivateProfileStringW(L"Settings",L"Level",b,ini.c_str());
    wsprintfW(b,L"%d",g_muted?1:0); WritePrivateProfileStringW(L"Settings",L"Muted",b,ini.c_str());
    wsprintfW(b,L"%d",g_volPct); WritePrivateProfileStringW(L"Settings",L"Volume",b,ini.c_str());
+   WritePrivateProfileStringW(L"Settings",L"CheckUpdatesOnStart",g_checkUpdates?L"1":L"0",ini.c_str());
    WINDOWPLACEMENT wp={sizeof(wp)};
    if(GetWindowPlacement(g_hwnd,&wp)){
       wchar_t w[128]; wsprintfW(w,L"%d,%d,%d,%d,%d",wp.rcNormalPosition.left,wp.rcNormalPosition.top,
@@ -305,6 +338,7 @@ static void loadSettings(){
    g_level=(int)GetPrivateProfileIntW(L"Settings",L"Level",1,ini.c_str()); if(g_level<0||g_level>2) g_level=1;
    g_muted=GetPrivateProfileIntW(L"Settings",L"Muted",0,ini.c_str())!=0;
    g_volPct=(int)GetPrivateProfileIntW(L"Settings",L"Volume",100,ini.c_str()); g_volPct=std::max(0,std::min(100,g_volPct));
+   g_checkUpdates=GetPrivateProfileIntW(L"Settings",L"CheckUpdatesOnStart",1,ini.c_str())!=0;
 }
 static void snd(const char* k){ playSound(k,g_volPct/100.f); }
 
@@ -394,7 +428,7 @@ static void dealTick(double now){
       }
       snd("click"); g_dirty=true;
    }
-   if(g_deal.stage==1 && now>=g_deal.tDeal){           // red -> magazine, blue -> magazine, columns, red -> hand, blue -> hand
+   if(g_deal.stage==1 && now>=g_deal.tDeal){           // magazines, hands, then the table (columns)
       g_deal.stage=2;
       g_dealTops.clear();
       relayout(false,true);
@@ -446,6 +480,7 @@ static void newGameStart(){
       g_dealUntil=g_start.t0+START_DUR+0.15;
    }
    g_start.active=true; g_start.cardId=g_game.startCardId;
+   g_flame=Flame(); g_flame.igniteAt=g_start.t0+START_DUR;     // the flame lights up when the winning card has landed
    snd("nowa");
    g_ctx=AIContext();
    const bool me=g_game.turn==0;
@@ -468,6 +503,7 @@ static bool loadSavedGame(){
    for(Vis& v:V) v=Vis();
    relayout(true);
    g_dealUntil=0; g_ctx=AIContext();
+   g_flame=Flame(); g_flame.igniteAt=nowSec();
    if(g_game.turn==1) g_aiAt=nowSec()+0.8;
    setStatus(L"Wczytano ostatnią grę.",false,3.5);
    return true;
@@ -561,20 +597,11 @@ static void autoClick(int pile){
    if(pile==handId(0)){ humanDraw(); return; }
    const Card* c=g_game.srcTop(pile,0);
    if(!c) return;
-   AIContext none; Move best; float bestSc=-1e9f; bool found=false;
-   for(int d=0;d<NP;d++){
-      if(!g_game.canMove(pile,d,0)) continue;
-      float sc=scoreMove(g_game,{pile,d},0,none,2);
-      if(sc<=REJECTED+1) continue;                                          // undo-able / looping moves
-      if((ptype(d)==PT_RES||ptype(d)==PT_WASTE) && sc<=0) continue;         // pointless on the opponent's piles
-      if(sc>bestSc){ bestSc=sc; best={pile,d}; found=true; }
-   }
-   if(pile==turnedId(0)){
-      if(found && bestSc>20) humanMove(best.src,best.dst); else humanDiscard();
-      return;
-   }
-   if(found){ humanMove(best.src,best.dst); return; }
-   snd("nono"); setStatus(L"Ta karta nie ma teraz sensownego ruchu.",true,2.5);
+   // Best of ALL legal moves (see bestClickMove). Only when there is none: the turned card goes to the waste pile.
+   Move best;
+   if(bestClickMove(g_game,pile,best)){ humanMove(best.src,best.dst); return; }
+   if(pile==turnedId(0)){ humanDiscard(); return; }
+   snd("nono"); setStatus(L"Ta karta nie ma żadnego dozwolonego ruchu.",true,2.5);
 }
 // Debug aid (F9): dump every pile to garibaldi_dump.txt next to the exe.
 static void dumpState(){
@@ -591,29 +618,12 @@ static void dumpState(){
    fprintf(f,"turn=%d over=%d totalTurns=%d idle=%d\n",g_game.turn,(int)g_game.over,g_game.totalTurns,g_game.idle);
    fclose(f);
 }
-static void showRules(){
-   MessageBoxW(g_hwnd,
-      L"GARIBALDKA (Russian Bank, crapette)\n\n"
-      L"Cel: jako pierwszy pozbądź się wszystkich swoich kart: z magazynu, talii i śmietnika.\n\n"
-      L"Układ: każdy gracz ma własną talię 52 kart. Magazyn to 12 kart zakrytych i 1 odkryta. "
-      L"Po 4 karty z talii każdego gracza leżą we wspólnych kolumnach (razem 8). Reszta (35) to talia. "
-      L"Pośrodku jest 8 fundamentów budowanych od asa do króla w jednym kolorze. Mają zarezerwowane kolory, po dwa na kolor, w kolejności starszeństwa: pik, kier, karo, trefl (as zaczyna fundament swojego koloru). Zaczyna ten, kto ma starszą kartę w magazynie (na początku gry unosi się i błyska). "
-      L"Przy takich samych figurach decyduje kolor: pik, kier, karo, trefl. Przy identycznych kartach każdy odkrywa pierwszą kartę z talii i ta decyduje tak samo (figura, potem kolor); jeśli znów są identyczne, odkrywane są kolejne. Odkryte karty wracają pod talie.\n\n"
-      L"Zagrania:\n"
-      L"• Na fundament: as, a potem kolejne karty tego samego koloru.\n"
-      L"• Na kolumnę: karta o jeden niższa, w innym kolorze (np. 6♥ na 7♣). Przekładasz po jednej karcie, ale gdy da się to zrobić kolejnymi ruchami (przy wolnych kolumnach i miejscach na innych kolumnach), możesz złapać cały ułożony sekwens: gra sama wykona i pokaże wszystkie ruchy. Pusta kolumna przyjmie dowolną kartę.\n"
-      L"• Na magazyn lub śmietnik przeciwnika: karta tego samego koloru o jeden wyższa lub niższa.\n"
-      L"• Ścisły przymus: każdą kartę, którą możesz zagrać na fundament (wierzch magazynu, dobrana karta, wierzch śmietnika lub kolumny), musisz tam dołożyć. Kto zapomni i spróbuje dobrać lub odrzucić kartę, traci turę.\n\n"
-      L"Tura: graj z magazynu, śmietnika i kolumn. Gdy nie możesz lub nie chcesz grać dalej, dobierz kartę z talii. "
-      L"Zagraj ją albo odrzuć na swój śmietnik. Odrzucenie kończy turę. Gdy talia się skończy, śmietnik staje się nową talią.\n\n"
-      L"Sterowanie: kliknięcie karty przenosi ją automatycznie na najlepsze miejsce (dobraną kartę, jeśli nic lepszego nie ma, odrzuca na śmietnik). "
-      L"Możesz też przeciągnąć kartę tam, gdzie chcesz. Kliknięcie talii dobiera kartę. "
-      L"Klawisze: spacja = dobierz, D = odrzuć/pas, H = podpowiedź, U lub Ctrl+Z lub Backspace = cofnij, F2 = nowa gra, M = dźwięk.\n\n"
-      L"Cofnij: cofa Twoją ostatnią czynność (ruch, dobranie, odrzucenie, przeniesienie sekwensu). Jeśli ta czynność skończyła turę, cofa też ruchy komputera wykonane od tamtej pory.\n\n"
-      L"Gra zapisuje się przy wyjściu i wczytuje przy następnym uruchomieniu.\n\n"
-      L"Komputer gra według 10 zasad opisanych w pliku AI_RULES.md.",
-      L"Garibaldka – zasady",MB_OK|MB_ICONINFORMATION);
-}
+// ---------------------------------------------------------------------------
+// Rules window: a scrollable panel drawn in the style of the game (see helpDraw).
+// ---------------------------------------------------------------------------
+struct Help{ bool open=false; float scroll=0, contentH=0, builtW=-1; bool dragThumb=false; float grabDy=0; };
+static Help g_help;
+static void showRules(){ g_help.open=!g_help.open; g_help.dragThumb=false; if(g_help.open){ g_help.scroll=0; g_help.builtW=-1; } g_dirty=true; }
 
 // ============================================================================
 // Direct2D target
@@ -631,6 +641,7 @@ static bool ensureRT(){
    return true;
 }
 static void discardRT(){
+   for(auto& b:g_flameSpr) if(b){ b->Release(); b=nullptr; }
    g_ren.setRT(nullptr,nullptr); CardImagesD2D::instance().invalidate();
    if(g_rt){ g_rt->Release(); g_rt=nullptr; }
 }
@@ -773,12 +784,332 @@ static void drawToolbar(){
       txt(lab,tx,b.y,b.w-(tx-b.x),b.h,14,1,1,1,en?0.95f:0.4f,false);
    }
 }
-static void drawNamePill(int p){
-   float x=slotX(1)+G.cw*0.45f, w=G.cw*1.5f+G.gap*2, h=34, y=rowY(p)+G.ch/2-h/2;
-   bool act=(g_game.turn==p)&&!g_game.over;
-   rrect(x,y,w,h,10,act?1.f:0.f,act?0.82f:0.f,act?0.25f:0.f,act?0.95f:0.35f);
-   std::wstring n=p==0?L"TY":std::wstring(L"KOMPUTER");
-   txt(n,x,y,w,h,14,act?0.1f:1.f,act?0.1f:1.f,act?0.1f:1.f,1.f,true);
+// The flame: burning next to the magazine of the player whose turn it is.
+static float flameCenterY(int p){ return rowY(p)+G.ch*0.5f; }
+static void drawFlame(double now){
+   Flame& F=g_flame;
+   if(!F.lit && F.igniteAt>0 && now>=F.igniteAt){ F.lit=true; F.player=g_game.turn; F.y=flameCenterY(F.player); F.moving=false; F.last=now; }
+   double dt=F.last>0?std::min(0.1,now-F.last):0.0; F.last=now;
+   float target=(F.lit && !(g_game.over&&g_overShown))?1.f:0.f;          // goes out when the game is over
+   F.scale+=(target-F.scale)*(float)(1.0-std::exp(-dt*(target>F.scale?4.5:7.0)));
+   if(F.scale<0.01f && target==0.f) return;
+   if(F.lit){
+      if(!g_game.over && g_game.turn!=F.player){                          // the turn changed: the flame moves on
+         F.from=F.y; F.to=flameCenterY(g_game.turn); F.t0=now; F.moving=true; F.player=g_game.turn;
+      }
+      if(F.moving){
+         float pr=(float)((now-F.t0)/F.dur); if(pr>=1.f){ pr=1.f; F.moving=false; }
+         F.y=F.from+(F.to-F.from)*easeInOut(pr);                          // accelerates, then slows down
+      } else F.y=flameCenterY(F.player);
+   }
+   const float cx=G.x0-G.fs*0.5f-2.f;
+   const float H=G.ch*0.92f*F.scale, W=G.fs*0.78f*F.scale;
+   const float by=F.y+G.ch*0.44f;                                         // base of the flame
+   const float t=(float)now, fl=0.5f+0.5f*std::sin(t*13.f)*std::sin(t*7.3f+1.f);   // flicker 0..1
+   const float a=std::min(1.f,F.scale*1.6f);
+   auto P=[](float x,float y){ return D2D1::Point2F(x,y); };
+   // glow on the table around the fire
+   {
+      ID2D1GradientStopCollection* st=nullptr; D2D1_GRADIENT_STOP gs[2];
+      gs[0].position=0.f; gs[0].color=D2D1::ColorF(1.f,0.55f,0.12f,(0.26f+0.12f*fl)*a);
+      gs[1].position=1.f; gs[1].color=D2D1::ColorF(1.f,0.35f,0.05f,0.f);
+      if(SUCCEEDED(g_rt->CreateGradientStopCollection(gs,2,&st))){
+         ID2D1RadialGradientBrush* rb=nullptr;
+         float rx=W*2.1f+1.f, ry=H*0.9f+1.f;
+         if(SUCCEEDED(g_rt->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(P(cx,by-H*0.35f),P(0,0),rx,ry),st,&rb))){
+            g_rt->FillEllipse(D2D1::Ellipse(P(cx,by-H*0.35f),rx,ry),rb); rb->Release();
+         }
+         st->Release();
+      }
+   }
+   // The fire is a swarm of soft particles that rise, wander (turbulence), shrink, fade and cool down:
+   // white-hot yellow at the base, orange and red higher up, a little dark smoke above. Everything is a function
+   // of time, so nothing has to be stored between frames.
+   static const float SC[8][3]={{1.f,0.97f,0.78f},{1.f,0.86f,0.32f},{1.f,0.68f,0.10f},{1.f,0.50f,0.04f},
+                                {0.98f,0.34f,0.02f},{0.86f,0.20f,0.02f},{0.50f,0.09f,0.03f},{0.30f,0.28f,0.27f}};
+   if(!g_flameSpr[0]){
+      for(int i=0;i<8;i++){
+         ID2D1BitmapRenderTarget* brt=nullptr;
+         if(FAILED(g_rt->CreateCompatibleRenderTarget(D2D1::SizeF(64,64),&brt))) return;
+         brt->BeginDraw(); brt->Clear(D2D1::ColorF(0,0,0,0));
+         D2D1_GRADIENT_STOP gs[4];
+         gs[0].position=0.00f; gs[0].color=D2D1::ColorF(SC[i][0],SC[i][1],SC[i][2],1.00f);
+         gs[1].position=0.35f; gs[1].color=D2D1::ColorF(SC[i][0],SC[i][1],SC[i][2],0.55f);
+         gs[2].position=0.70f; gs[2].color=D2D1::ColorF(SC[i][0],SC[i][1],SC[i][2],0.16f);
+         gs[3].position=1.00f; gs[3].color=D2D1::ColorF(SC[i][0],SC[i][1],SC[i][2],0.00f);
+         ID2D1GradientStopCollection* st=nullptr; ID2D1RadialGradientBrush* rb=nullptr;
+         if(SUCCEEDED(brt->CreateGradientStopCollection(gs,4,&st))){
+            if(SUCCEEDED(brt->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(P(32,32),P(0,0),32,32),st,&rb))){
+               brt->FillEllipse(D2D1::Ellipse(P(32,32),32,32),rb); rb->Release();
+            }
+            st->Release();
+         }
+         brt->EndDraw(); brt->GetBitmap(&g_flameSpr[i]); brt->Release();
+      }
+   }
+   auto spr=[&](int stage,float x,float y,float r,float op){
+      if(r<0.5f||op<=0.f||!g_flameSpr[stage]) return;
+      g_rt->DrawBitmap(g_flameSpr[stage],D2D1::RectF(x-r,y-r,x+r,y+r),std::min(1.f,op),D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+   };
+   auto frac=[](float v){ return v-std::floor(v); };
+   auto hash=[&](int j,float k){ return frac(std::sin(j*12.9898f+k*78.233f)*43758.5453f); };
+   const float PI=3.14159265f;
+   float wind=std::sin(t*1.6f+0.7f)*0.16f+std::sin(t*3.1f)*0.05f;           // the whole fire sways a little
+   // smoke
+   for(int j=0;j<6;j++){
+      float age=frac(t*0.33f+j/6.f);
+      float x=cx+std::sin(t*0.9f+j*2.1f)*W*0.45f*age+wind*W*age*1.5f, y=by-H*(1.0f+age*0.75f);
+      spr(7,x,y,W*(0.45f+0.6f*age),0.13f*std::sin(PI*age)*a);
+   }
+   // body of the fire: old (cool) particles first, young (hot) ones on top
+   struct Pt{ float age,x,y,r,op; int st; };
+   Pt pts[72]; int n=0; const int N=64;
+   for(int j=0;j<N;j++){
+      float age=frac(t*0.95f+(float)j/N+hash(j,1.f)*0.02f);
+      float spread=(hash(j,2.f)-0.5f)*W*0.70f*(1.f-age*0.86f);
+      float turb=std::sin(t*4.3f+j*2.3f+age*6.f)*W*0.20f*age+std::sin(t*9.7f+j*1.1f)*W*0.05f*age;
+      float life=std::sin(PI*std::min(1.f,age*1.1f));
+      pts[n++]={age, cx+spread+turb+wind*W*age*age*1.4f, by-H*1.02f*std::pow(age,0.82f),
+                W*(0.20f+0.30f*life)*(1.f-age*0.45f)+1.f,
+                0.80f*std::min(1.f,age*7.f)*std::pow(1.f-age,0.8f)*(0.9f+0.1f*fl), 1+std::min(5,(int)(age*5.4f))};
+   }
+   std::sort(pts,pts+n,[](const Pt& p,const Pt& q){ return p.age>q.age; });
+   for(int i=0;i<n;i++) spr(pts[i].st,pts[i].x,pts[i].y,pts[i].r,pts[i].op*a);
+   // white-hot core at the base
+   spr(2,cx,by-H*0.14f,W*0.46f,0.70f*a);
+   spr(1,cx+std::sin(t*9.f)*W*0.03f,by-H*0.12f,W*0.30f,0.85f*a);
+   spr(0,cx,by-H*0.10f,W*0.16f,0.90f*a);
+   // sparks
+   for(int j=0;j<6;j++){
+      float age=frac(t*0.55f+j*0.17f);
+      float ex=cx+std::sin(j*2.7f+t*2.3f)*W*(0.2f+0.4f*age)+wind*W*age, ey=by-H*(0.25f+1.05f*age), er=(1.f-age)*2.1f+0.5f;
+      ID2D1SolidColorBrush* eb=nullptr;
+      if(SUCCEEDED(g_rt->CreateSolidColorBrush(D2D1::ColorF(1.f,0.80f-0.45f*age,0.18f,(1.f-age)*0.9f*a),&eb))){ g_rt->FillEllipse(D2D1::Ellipse(P(ex,ey),er,er),eb); eb->Release(); }
+   }
+}
+
+// ============================================================================
+// Auto-update (GitHub Releases), the same way as in Pasjans Dziadkowy - see update.h for the network,
+// version and self-replace mechanics. The check runs on a background thread (a slow network never delays
+// the start); only an explicit "Tak" downloads the new exe, which is then swapped in by a helper .bat.
+// ============================================================================
+static const UINT WM_UPDATE_CHECK_DONE    = WM_APP+1;
+static const UINT WM_UPDATE_DOWNLOAD_DONE = WM_APP+2;
+static bool g_updateBusy=false;
+static DWORD WINAPI updateCheckThreadProc(LPVOID param){
+   HWND hwnd=(HWND)param;
+   update::ReleaseInfo* info=new update::ReleaseInfo(update::checkLatest());
+   PostMessageW(hwnd,WM_UPDATE_CHECK_DONE,0,(LPARAM)info);
+   return 0;
+}
+struct UpdateDownloadJob { HWND hwnd; std::wstring url, destPath; bool ok; };
+static DWORD WINAPI updateDownloadThreadProc(LPVOID param){
+   UpdateDownloadJob* job=(UpdateDownloadJob*)param;
+   job->ok=update::httpDownload(job->url,job->destPath);
+   PostMessageW(job->hwnd,WM_UPDATE_DOWNLOAD_DONE,0,(LPARAM)job);
+   return 0;
+}
+static void startUpdateCheck(){
+   if(g_updateBusy||!g_hwnd) return;
+   g_updateBusy=true;
+   HANDLE t=CreateThread(nullptr,0,updateCheckThreadProc,g_hwnd,0,nullptr);
+   if(t) CloseHandle(t); else g_updateBusy=false;
+}
+static void beginUpdateDownload(HWND hwnd,const std::wstring& url){
+   wchar_t exePath[MAX_PATH]; GetModuleFileNameW(nullptr,exePath,MAX_PATH);
+   UpdateDownloadJob* job=new UpdateDownloadJob{hwnd,url,std::wstring(exePath)+L".new",false};
+   HANDLE t=CreateThread(nullptr,0,updateDownloadThreadProc,job,0,nullptr);
+   if(t) CloseHandle(t); else delete job;
+}
+
+// ============================================================================
+// Rules window
+// ============================================================================
+enum { HK_H=1, HK_P=2, HK_B=3, HK_NOTE=4 };      // heading, paragraph, bullet (bold lead-in), small note
+struct HelpItem{ int kind; const wchar_t* lead; const wchar_t* text; };
+static const HelpItem HELP_DOC[]={
+ {HK_H,nullptr,L"Cel gry"},
+ {HK_P,nullptr,L"Jako pierwszy pozbądź się wszystkich swoich kart: z magazynu, z talii i ze śmietnika. Samo opróżnienie magazynu nie wystarcza."},
+
+ {HK_H,nullptr,L"Rozkład kart"},
+ {HK_P,nullptr,L"Każdy gracz ma własną talię 52 kart (Ty niebieską, komputer czerwoną)."},
+ {HK_B,L"Magazyn",L"12 kart zakrytych i 1 odkryta na wierzchu."},
+ {HK_B,L"Talia",L"35 kart. Dobierasz je po jednej."},
+ {HK_B,L"Dobrana karta",L"karta odkryta z talii. Musisz ją zagrać albo odrzucić."},
+ {HK_B,L"Śmietnik",L"odrzucone karty. Gdy talia się skończy, śmietnik staje się nową talią."},
+ {HK_B,L"Kolumny",L"8 wspólnych kolumn (na początku po 4 karty od każdego gracza)."},
+ {HK_B,L"Fundamenty",L"8 stosów budowanych od asa do króla w jednym kolorze. Mają zarezerwowane kolory, po dwa na kolor, w kolejności starszeństwa: pik, kier, karo, trefl. As zaczyna fundament swojego koloru."},
+
+ {HK_H,nullptr,L"Dozwolone zagrania"},
+ {HK_B,L"Na fundament",L"as, a potem kolejne karty tego samego koloru."},
+ {HK_B,L"Na kolumnę",L"karta o jeden niższa, w innym kolorze (np. 6♥ na 7♣). Pusta kolumna przyjmie dowolną kartę."},
+ {HK_B,L"Cały sekwens",L"karty przekłada się po jednej, ale gdy da się przenieść ułożony ciąg kolejnymi ruchami (wolne kolumny lub miejsca na innych kolumnach), możesz złapać jego pierwszą kartę. Gra sama wykona i pokaże wszystkie ruchy."},
+ {HK_B,L"Na magazyn lub śmietnik przeciwnika",L"karta tego samego koloru o jeden wyższa lub niższa. Taka karta zasłania przeciwnikowi jego kartę."},
+
+ {HK_H,nullptr,L"Ścisły przymus"},
+ {HK_P,nullptr,L"Każdą kartę, którą możesz zagrać na fundament (wierzch magazynu, dobrana karta, wierzch śmietnika lub kolumny), musisz tam dołożyć."},
+ {HK_P,nullptr,L"Kto zapomni i spróbuje dobrać kartę, odrzucić ją lub spasować, traci turę."},
+
+ {HK_H,nullptr,L"Przebieg tury"},
+ {HK_B,L"1.",L"Graj kartami z magazynu, śmietnika i kolumn, ile chcesz."},
+ {HK_B,L"2.",L"Gdy nie możesz lub nie chcesz grać dalej, dobierz kartę z talii."},
+ {HK_B,L"3.",L"Zagraj ją albo odrzuć na swój śmietnik. Odrzucenie kończy turę."},
+ {HK_B,L"Pas",L"możliwy tylko wtedy, gdy talia i śmietnik są puste."},
+ {HK_B,L"Płomień",L"płonie obok magazynu gracza, którego jest tura."},
+
+ {HK_H,nullptr,L"Kto zaczyna"},
+ {HK_P,nullptr,L"Zaczyna ten, kto ma starszą kartę w magazynie (as jest najmłodszy, król najstarszy)."},
+ {HK_P,nullptr,L"Takie same figury: decyduje kolor (pik, kier, karo, trefl). Identyczne karty: każdy odkrywa pierwszą kartę z talii i ta rozstrzyga tak samo; jeśli znów są identyczne, odkrywane są kolejne. Odkryte karty wracają pod talie."},
+
+ {HK_H,nullptr,L"Sterowanie myszą"},
+ {HK_B,L"Kliknięcie karty",L"przenosi ją na najlepsze miejsce. Dobrana karta trafia na śmietnik tylko wtedy, gdy nie ma dla niej żadnego innego ruchu."},
+ {HK_B,L"Przeciąganie",L"przenosi kartę lub cały sekwens tam, gdzie chcesz. Zielone ramki pokazują dozwolone miejsca."},
+
+ {HK_H,nullptr,L"Skróty klawiszowe"},
+ {HK_B,L"Spacja",L"dobierz kartę"},
+ {HK_B,L"D",L"odrzuć dobraną kartę / pas"},
+ {HK_B,L"H",L"podpowiedź (karta sama pokazuje ruch)"},
+ {HK_B,L"U, Ctrl+Z, Backspace",L"cofnij"},
+ {HK_B,L"F2",L"nowa gra"},
+ {HK_B,L"M",L"dźwięk włączony / wyłączony"},
+
+ {HK_H,nullptr,L"Cofanie i zapis gry"},
+ {HK_P,nullptr,L"Cofnij cofa Twoją ostatnią czynność: ruch, dobranie, odrzucenie, a przeniesienie całego sekwensu jako jeden krok. Jeśli ta czynność skończyła turę, cofa też ruchy komputera wykonane od tamtej pory."},
+ {HK_P,nullptr,L"Gra zapisuje się przy wyjściu i wczytuje przy następnym uruchomieniu."},
+
+ {HK_H,nullptr,L"Komputer"},
+ {HK_P,nullptr,L"Komputer ma trzy poziomy trudności: Łatwy, Normalny i Trudny. Gra według dziesięciu zasad opisanych w pliku AI_RULES.md."},
+};
+struct HelpBlock{ IDWriteTextLayout* lay=nullptr; int kind=0; float y=0,h=0; };
+static std::vector<HelpBlock> g_helpBlocks;
+static void helpRelease(){ for(auto& b:g_helpBlocks) if(b.lay) b.lay->Release(); g_helpBlocks.clear(); }
+// panel (px..), header, and the scrolled view (vx..)
+static void helpGeom(float& px,float& py,float& pw,float& ph,float& vx,float& vy,float& vw,float& vh){
+   pw=std::min(840.f,G.w-30.f); ph=G.h-30.f; px=std::floor((G.w-pw)/2.f); py=15.f;
+   vx=px+28.f; vy=py+82.f; vw=pw-28.f-40.f; vh=ph-82.f-46.f;
+}
+static void helpBuild(float width){
+   helpRelease(); float y=0;
+   for(const HelpItem& it:HELP_DOC){
+      float px= it.kind==HK_H?22.f : it.kind==HK_NOTE?13.f : 16.f;
+      float indent= it.kind==HK_B?24.f:0.f;
+      std::wstring text= it.lead ? std::wstring(it.lead)+L" – "+it.text : std::wstring(it.text);
+      IDWriteTextFormat* f=nullptr;
+      g_dw->CreateTextFormat(L"Segoe UI",nullptr,it.kind==HK_H?DWRITE_FONT_WEIGHT_BOLD:DWRITE_FONT_WEIGHT_NORMAL,
+         it.kind==HK_NOTE?DWRITE_FONT_STYLE_ITALIC:DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,px,L"",&f);
+      if(!f) continue;
+      f->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM,px*1.45f,px*1.12f);
+      IDWriteTextLayout* lay=nullptr;
+      g_dw->CreateTextLayout(text.c_str(),(UINT32)text.size(),f,width-indent,100000.f,&lay);
+      f->Release(); if(!lay) continue;
+      if(it.lead){ DWRITE_TEXT_RANGE r={0,(UINT32)wcslen(it.lead)}; lay->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD,r); }
+      DWRITE_TEXT_METRICS m{}; lay->GetMetrics(&m);
+      float before= it.kind==HK_H?(y==0?0.f:24.f) : it.kind==HK_B?5.f : 8.f;
+      HelpBlock b; b.lay=lay; b.kind=it.kind; b.y=y+before; b.h=m.height;
+      y=b.y+b.h+(it.kind==HK_H?12.f:0.f);
+      g_helpBlocks.push_back(b);
+   }
+   g_help.contentH=y+12.f; g_help.builtW=width;
+}
+static void helpClamp(float vh){ g_help.scroll=std::max(0.f,std::min(g_help.scroll,std::max(0.f,g_help.contentH-vh))); }
+// scrollbar thumb: top and height
+static void helpThumb(float vy,float vh,float& ty,float& th){
+   float maxS=std::max(1.f,g_help.contentH-vh);
+   th=std::max(40.f,vh*vh/std::max(vh,g_help.contentH));
+   ty=vy+(vh-th)*(g_help.scroll/maxS);
+}
+static void helpDraw(){
+   if(!g_help.open||!g_rt||!g_dw) return;
+   float px,py,pw,ph,vx,vy,vw,vh; helpGeom(px,py,pw,ph,vx,vy,vw,vh);
+   if(g_help.builtW!=vw) helpBuild(vw);
+   helpClamp(vh);
+   rrect(0,0,G.w,G.h,0,0,0,0,0.65f);                                   // dim the table
+   rrect(px+5,py+8,pw,ph,16,0,0,0,0.40f);                              // shadow
+   rrect(px,py,pw,ph,16,0.05f,0.16f,0.10f,0.99f);                      // panel (dark felt)
+   rrect(px,py,pw,ph,16,0.95f,0.80f,0.30f,0.85f,false,2.f);            // gold border
+   txt(L"Garibaldka",px+28,py+12,pw-120,40,30,1.f,0.86f,0.25f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
+   txt(std::wstring(L"Wersja ")+APP_VERSION+L"  ·  zbudowana "+buildDateText(),px+29,py+48,pw-120,22,15,0.82f,0.90f,0.84f,0.9f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+   rrect(px+24,py+76,pw-48,1.5f,0,1,1,1,0.20f);                        // rule under the header
+   // close button (an X made of two lines)
+   float cbx=px+pw-52, cby=py+16;
+   rrect(cbx,cby,34,34,8,1,1,1,0.14f); rrect(cbx,cby,34,34,8,1,1,1,0.35f,false,1.f);
+   g_ren.drawLine(cbx+11,cby+11,cbx+23,cby+23,2.2f,255,255,255,230);
+   g_ren.drawLine(cbx+23,cby+11,cbx+11,cby+23,2.2f,255,255,255,230);
+   // scrolled content
+   ID2D1SolidColorBrush *bBody=nullptr,*bGold=nullptr,*bDim=nullptr,*bRule=nullptr;
+   g_rt->CreateSolidColorBrush(D2D1::ColorF(0.93f,0.96f,0.93f,1.f),&bBody);
+   g_rt->CreateSolidColorBrush(D2D1::ColorF(1.f,0.86f,0.30f,1.f),&bGold);
+   g_rt->CreateSolidColorBrush(D2D1::ColorF(0.72f,0.80f,0.74f,1.f),&bDim);
+   g_rt->CreateSolidColorBrush(D2D1::ColorF(1.f,0.86f,0.30f,0.35f),&bRule);
+   g_rt->PushAxisAlignedClip(D2D1::RectF(vx-4,vy,vx+vw+8,vy+vh),D2D1_ANTIALIAS_MODE_ALIASED);
+   for(const HelpBlock& b:g_helpBlocks){
+      float top=vy+b.y-g_help.scroll;
+      if(top+b.h<vy-4||top>vy+vh+4) continue;
+      ID2D1SolidColorBrush* br= b.kind==HK_H?bGold : b.kind==HK_NOTE?bDim : bBody;
+      if(b.kind==HK_B){                                                  // bullet
+         D2D1_ELLIPSE e=D2D1::Ellipse(D2D1::Point2F(vx+8.f,top+11.f),3.2f,3.2f);
+         if(bGold) g_rt->FillEllipse(e,bGold);
+         if(br) g_rt->DrawTextLayout(D2D1::Point2F(vx+24.f,top),b.lay,br);
+      } else {
+         if(br) g_rt->DrawTextLayout(D2D1::Point2F(vx,top),b.lay,br);
+         if(b.kind==HK_H && bRule) g_rt->DrawLine(D2D1::Point2F(vx,top+b.h+4.f),D2D1::Point2F(vx+vw,top+b.h+4.f),bRule,1.2f);
+      }
+   }
+   g_rt->PopAxisAlignedClip();
+   for(auto* b:{bBody,bGold,bDim,bRule}) if(b) b->Release();
+   // scrollbar
+   if(g_help.contentH>vh+1){
+      float sx=px+pw-30, ty,th; helpThumb(vy,vh,ty,th);
+      rrect(sx,vy,8,vh,4,1,1,1,0.10f);
+      rrect(sx,ty,8,th,4,1.f,0.86f,0.30f,g_help.dragThumb?0.95f:0.70f);
+   }
+   // updates: a check box (check at start)
+   float fy=py+ph-38;
+   rrect(px+24,fy-8,pw-48,1.5f,0,1,1,1,0.20f);
+   rrect(px+26,fy+4,17,17,4,1,1,1,0.14f); rrect(px+26,fy+4,17,17,4,1,1,1,0.45f,false,1.2f);
+   if(g_checkUpdates){ g_ren.drawLine(px+30,fy+13,px+34,fy+17,2.4f,255,220,80,255); g_ren.drawLine(px+34,fy+17,px+40,fy+8,2.4f,255,220,80,255); }
+   txt(L"Sprawdzaj aktualizacje przy starcie",px+52,fy,320,26,14,0.90f,0.95f,0.90f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+}
+// mouse handling of the rules window (all clicks are consumed while it is open)
+static void helpMouseDown(float mx,float my){
+   float px,py,pw,ph,vx,vy,vw,vh; helpGeom(px,py,pw,ph,vx,vy,vw,vh);
+   float cbx=px+pw-52, cby=py+16;
+   if(mx>=cbx&&mx<=cbx+34&&my>=cby&&my<=cby+34){ showRules(); return; }
+   if(mx<px||mx>px+pw||my<py||my>py+ph){ showRules(); return; }          // a click outside the panel closes it
+   float fy=py+ph-38;
+   if(my>=fy&&my<=fy+26){
+      if(mx>=px+24&&mx<=px+24+360){ g_checkUpdates=!g_checkUpdates; saveSettings(); g_dirty=true; return; }
+   }
+   if(g_help.contentH>vh+1){
+      float sx=px+pw-30, ty,th; helpThumb(vy,vh,ty,th);
+      if(mx>=sx-6&&mx<=sx+14&&my>=vy&&my<=vy+vh){
+         if(my>=ty&&my<=ty+th){ g_help.dragThumb=true; g_help.grabDy=my-ty; SetCapture(g_hwnd); }
+         else { g_help.scroll+= (my<ty?-1.f:1.f)*vh*0.9f; helpClamp(vh); }    // a click on the track: page up / down
+         g_dirty=true;
+      }
+   }
+}
+static void helpMouseMove(float,float my){
+   if(!g_help.dragThumb) return;
+   float px,py,pw,ph,vx,vy,vw,vh; helpGeom(px,py,pw,ph,vx,vy,vw,vh);
+   float ty,th; helpThumb(vy,vh,ty,th);
+   float track=vh-th; if(track<1.f) return;
+   g_help.scroll=((my-g_help.grabDy-vy)/track)*(g_help.contentH-vh);
+   helpClamp(vh); g_dirty=true;
+}
+static void helpMouseUp(){ if(g_help.dragThumb){ g_help.dragThumb=false; ReleaseCapture(); g_dirty=true; } }
+static void helpKey(WPARAM k){
+   float px,py,pw,ph,vx,vy,vw,vh; helpGeom(px,py,pw,ph,vx,vy,vw,vh);
+   switch(k){
+   case VK_ESCAPE: case VK_F1: showRules(); return;
+   case VK_UP:    g_help.scroll-=46; break;
+   case VK_DOWN:  g_help.scroll+=46; break;
+   case VK_PRIOR: g_help.scroll-=vh*0.9f; break;
+   case VK_NEXT:  g_help.scroll+=vh*0.9f; break;
+   case VK_HOME:  g_help.scroll=0; break;
+   case VK_END:   g_help.scroll=1e9f; break;
+   }
+   helpClamp(vh); g_dirty=true;
 }
 
 static void render(){
@@ -811,7 +1142,7 @@ static void render(){
       if(ptype(id)==PT_FND) drawFoundationAce(id,x,y);
       else g_ren.drawEmpty(x,y,slotLabel(id));
    }
-   drawNamePill(0); drawNamePill(1);
+   drawFlame(now);
 
    // cards, back to front
    struct Item{ int z; int id; };
@@ -917,6 +1248,7 @@ static void render(){
    if(g_statusUntil>0 && now>g_statusUntil){ g_statusUntil=0; statusForTurn(); }
    if(g_statusErr) txt(g_status,12,G.h-SB,G.w-24,SB,14,1.f,0.5f,0.5f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
    else            txt(g_status,12,G.h-SB,G.w-24,SB,14,1,1,1,0.85f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+   helpDraw();                                        // the rules window is on top of everything
    HRESULT hr=g_rt->EndDraw();
    if(hr==D2DERR_RECREATE_TARGET) discardRT();
    g_dirty=false;
@@ -1020,6 +1352,7 @@ static int hitTabCard(int col,float x,float y){
 }
 
 static void onLDown(int mx,int my){
+   if(g_help.open){ helpMouseDown((float)mx,(float)my); return; }
    int b=hitButton((float)mx,(float)my);
    if(b>=0){ if(btnEnabled(b)) doButton(b); return; }
    if(!humanTurn()) return;
@@ -1044,6 +1377,7 @@ static void onLDown(int mx,int my){
    SetCapture(g_hwnd);
 }
 static void onMouseMove(int mx,int my){
+   if(g_help.open){ helpMouseMove((float)mx,(float)my); return; }
    int hb=hitButton((float)mx,(float)my);
    if(hb!=g_hoverBtn){ g_hoverBtn=hb; g_dirty=true; }
    if(!g_drag.down) return;
@@ -1067,6 +1401,7 @@ static void onMouseMove(int mx,int my){
    }
 }
 static void onLUp(int mx,int my){
+   if(g_help.open){ helpMouseUp(); return; }
    if(!g_drag.down) return;
    ReleaseCapture(); g_drag.down=false;
    if(g_dragging){
@@ -1141,7 +1476,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
       if(wp==SIZE_MINIMIZED||w<=0||h<=0) return 0;
       if(g_rt) g_rt->Resize(D2D1::SizeU((UINT32)w,(UINT32)h));
       computeGeo((float)w,(float)h); layoutButtons();
-      relayout(true); g_dirty=true; return 0;}
+      g_help.builtW=-1; relayout(true); g_dirty=true; return 0;}
    case WM_GETMINMAXINFO:{ auto* m=(MINMAXINFO*)lp; m->ptMinTrackSize.x=820; m->ptMinTrackSize.y=620; return 0;}
    case WM_PAINT:{ PAINTSTRUCT ps; BeginPaint(hwnd,&ps); render(); EndPaint(hwnd,&ps); return 0;}
    case WM_ERASEBKGND: return 1;
@@ -1149,7 +1484,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
    case WM_LBUTTONUP:   onLUp(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)); return 0;
    case WM_LBUTTONDBLCLK: return 0;                       // ignored: a double click must not move two cards
    case WM_MOUSEMOVE:   onMouseMove(GET_X_LPARAM(lp),GET_Y_LPARAM(lp)); return 0;
+   case WM_MOUSEWHEEL:
+      if(g_help.open){ g_help.scroll-=(float)GET_WHEEL_DELTA_WPARAM(wp)/120.f*70.f; float px,py,pw,ph,vx,vy,vw,vh; helpGeom(px,py,pw,ph,vx,vy,vw,vh); helpClamp(vh); g_dirty=true; }
+      return 0;
    case WM_KEYDOWN:
+      if(g_help.open){ helpKey(wp); return 0; }
       switch(wp){
       case VK_F2:     doButton(B_NEW); break;
       case VK_BACK:   undoMove(); break;
@@ -1165,6 +1504,34 @@ static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
       case 'M':       doButton(B_SOUND); break;
       }
       return 0;
+   case WM_UPDATE_CHECK_DONE:{
+      std::unique_ptr<update::ReleaseInfo> info((update::ReleaseInfo*)lp);
+      g_updateBusy=false; g_dirty=true;
+      if(info->ok && update::isNewer(info->tag,APP_VERSION)){
+         std::wstring m=L"Dostępna nowsza wersja gry: "+info->tag+L" (masz "+std::wstring(APP_VERSION)+L").\n\nZaktualizować teraz?";
+         if(!info->notes.empty()){
+            std::wstring notes=info->notes;
+            if(notes.size()>500) notes=notes.substr(0,500)+L"…";
+            m+=L"\n\nCo nowego:\n"+notes;
+         }
+         if(MessageBoxW(hwnd,m.c_str(),L"Aktualizacja dostępna",MB_YESNO|MB_ICONINFORMATION)==IDYES)
+            beginUpdateDownload(hwnd,info->downloadUrl);
+      }
+      return 0;}
+   case WM_UPDATE_DOWNLOAD_DONE:{
+      std::unique_ptr<UpdateDownloadJob> job((UpdateDownloadJob*)lp);
+      if(!job->ok){
+         MessageBoxW(hwnd,L"Nie udało się pobrać aktualizacji. Spróbuj ponownie później.",L"Aktualizacja",MB_OK|MB_ICONERROR);
+         DeleteFileW(job->destPath.c_str());
+         return 0;
+      }
+      wchar_t exePath[MAX_PATH]; GetModuleFileNameW(nullptr,exePath,MAX_PATH);
+      if(update::launchSelfUpdate(job->destPath,exePath)){
+         DestroyWindow(hwnd);            // the game is saved on exit; the helper swaps the exe and starts it again
+      } else {
+         MessageBoxW(hwnd,L"Pobrano aktualizację, ale nie udało się jej zainstalować automatycznie.",L"Aktualizacja",MB_OK|MB_ICONERROR);
+      }
+      return 0;}
    case WM_ENDSESSION: if(wp) { saveGame(); saveSettings(); } return 0;
    case WM_DESTROY:
       saveGame(); saveSettings(); PostQuitMessage(0); return 0;
@@ -1196,7 +1563,8 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
    if(!wc.hIcon) wc.hIcon=LoadIcon(nullptr,IDI_APPLICATION);
    wc.hIconSm=(HICON)LoadImageW(hInst,L"APPICON",IMAGE_ICON,16,16,LR_DEFAULTCOLOR);
    RegisterClassExW(&wc);
-   HWND hwnd=CreateWindowExW(0,L"GaribaldkaWnd",L"Garibaldka 1.0.0",WS_OVERLAPPEDWINDOW,
+   std::wstring title=std::wstring(L"Garibaldka ")+APP_VERSION;
+   HWND hwnd=CreateWindowExW(0,L"GaribaldkaWnd",title.c_str(),WS_OVERLAPPEDWINDOW,
       CW_USEDEFAULT,CW_USEDEFAULT,1180,860,nullptr,nullptr,hInst,nullptr);
    if(!hwnd){ MessageBoxW(nullptr,L"Nie można utworzyć okna.",L"Garibaldka",MB_ICONERROR); return 1; }
    {  // restore window placement
@@ -1214,6 +1582,7 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
    UpdateWindow(hwnd);
    {  RECT rc; GetClientRect(hwnd,&rc); computeGeo((float)rc.right,(float)rc.bottom); layoutButtons(); }
    if(!loadSavedGame()) newGameStart();
+   if(g_checkUpdates) startUpdateCheck();
 
    MSG msg={};
    for(;;){
@@ -1227,8 +1596,10 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
       revealTick(now);
       aiTick(now);
       if(g_fw.active() && now-g_fwLast>=0.028){ g_fw.tick((int)G.w,(int)G.h); g_fwLast=now; g_dirty=true; }
+      bool flameBurning=g_flame.lit||g_flame.scale>0.01f||g_flame.igniteAt>0;
       bool anim=anyAnimating(now)||g_plan.active||g_dragging||g_prev.active||g_start.active||g_rev.active||g_deal.active||g_fw.active()||(g_game.over&&g_overShown&&now-g_overAt<1.0);
       if(anim||g_dirty){ render(); if(!anim) continue; Sleep(1); }
+      else if(flameBurning){ render(); MsgWaitForMultipleObjects(0,nullptr,FALSE,12,QS_ALLINPUT); }   // only the flame moves: ~60 fps without a busy loop
       else MsgWaitForMultipleObjects(0,nullptr,FALSE,25,QS_ALLINPUT);
    }
 done:

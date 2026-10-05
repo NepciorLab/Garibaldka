@@ -58,5 +58,5 @@ prawdziwym pozbyciem się wszystkich kart (średnio ok. 56 tur), a ok. 9% remise
 
 * **Kara za zapomnienie:** kto spróbuje dobrać kartę, odrzucić ją lub spasować, mając jeszcze kartę pasującą na fundament,
   traci turę (nic się wtedy nie dobiera ani nie odrzuca). Podpowiedź (H) zawsze wskazuje taką kartę w pierwszej kolejności.
-* **Kliknięcie karty** przenosi ją na najlepsze miejsce według tej samej oceny co ruchy komputera. Dobraną kartę, dla której
+* **Kliknięcie karty** przenosi ją na najlepszy z WSZYSTKICH dozwolonych ruchów, według tej samej oceny co ruchy komputera (ocena tylko szereguje ruchy: nawet ruch, którego komputer by nie wykonał, zostanie wykonany, jeśli jest jedyny, a cofnięcie jest zawsze pod ręką). Dobraną kartę odrzuca na śmietnik wyłącznie wtedy, gdy nie ma dla niej żadnego innego ruchu.
   nie ma nic lepszego (ocena do 20 punktów), odrzuca na śmietnik.

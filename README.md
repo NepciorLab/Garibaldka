@@ -12,13 +12,15 @@ karty, dźwięki i animacje (rozdawanie, obrót, przesuwanie kart, fajerwerki) c
 
 ## Animacje
 
+Płomień obok magazynu pokazuje, czyja jest tura: zapala się po wyłonieniu zaczynającego gracza i przesuwa się (z przyspieszeniem i zwolnieniem) do drugiego gracza po zakończeniu tury. W rozdaniu karty na stół (kolumny) trafiają na samym końcu.
+
 Rozdanie: obie talie leżą na jednej kupce, rozjeżdżają się na czerwoną i niebieską, potem karty lecą po kolei: czerwone na magazyn, niebieskie na magazyn, kolumny, czerwone do ręki, niebieskie do ręki. Na końcu równocześnie odwracają się wierzchnie karty magazynów i błyska karta, która rozstrzyga, kto zaczyna (200 ms, z poświatą na jedną kartę dookoła).
 
 Każdy ruch karty przyspiesza w pierwszej połowie i zwalnia w drugiej. Odkrycie karty w magazynie następuje dopiero po zakończeniu ruchu karty, która ją odsłoniła. Karta, która ma się przy tym odwrócić (dobranie z talii, rozdanie, powrót pod talię), unosi się i obraca w środkowej części lotu.
 
 ## Sterowanie
 
-* **Kliknij kartę** – przeniesie się automatycznie na najlepsze miejsce (fundament, kolumna...). Dobraną kartę, jeśli nic lepszego nie ma, odrzuci na śmietnik (kończy turę). Możesz też przeciągnąć kartę, gdzie chcesz.
+* **Kliknij kartę** – przeniesie się na najlepszy z wszystkich dozwolonych ruchów (fundament, kolumna, także dołożenie na śmietnik lub magazyn przeciwnika). Dobraną kartę odrzuci na śmietnik tylko wtedy, gdy nie ma dla niej żadnego innego ruchu. Możesz też przeciągnąć kartę lub cały sekwens, gdzie chcesz.
 * **Sekwens:** możesz złapać (przeciągnąć lub kliknąć) kartę w środku kolumny, jeśli od niej w dół leży ułożony ciąg (malejąco, na przemian kolory). Gdy da się go przenieść kolejnymi pojedynczymi ruchami (wolne kolumny, miejsca na wierzchach innych kolumn), gra znajduje najkrótszy plan i wykonuje go z animacją każdego ruchu. Gdy się nie da: „Za mało wolnego miejsca”.
 * Kliknij swoją talię (lub spacja), aby dobrać kartę. Odrzucanie: przycisk „Odrzuć” lub klawisz D.
 * Ścisły przymus: karta pasująca na fundament musi tam trafić. Kto spróbuje dobrać, odrzucić lub spasować, mając taką kartę, traci turę.
@@ -27,9 +29,15 @@ Każdy ruch karty przyspiesza w pierwszej połowie i zwalnia w drugiej. Odkrycie
 * Wygrywa ten, kto pierwszy pozbędzie się wszystkich kart (magazyn, talia i śmietnik).
 * Gra zapisuje się przy wyjściu (plik `Garibaldi.sav`) i wczytuje przy następnym uruchomieniu.
 * **Cofnij** (przycisk, `U`, `Ctrl+Z` lub `Backspace`): cofa Twoją ostatnią czynność (ruch, dobranie, odrzucenie, przeniesienie sekwensu jako jeden krok). Jeśli ta czynność skończyła turę, cofa też ruchy komputera wykonane od tamtej pory.
-* `H` – podpowiedź (karta sama pokazuje ruch, raz), `F2` – nowa gra, `M` – dźwięk, `F1` – zasady.
+* `H` – podpowiedź (karta sama pokazuje ruch, raz), `F2` – nowa gra, `M` – dźwięk, `F1` – zasady (przewijane okno w stylu gry: kółko myszy, strzałki, PgUp/PgDn, Esc zamyka).
 * Poziom komputera zmieniasz przyciskiem „Poziom”. Zasady SI: [AI_RULES.md](AI_RULES.md).
 * Diagnostyka: `F9` zapisuje stan stołu i dziennik ruchów do `garibaldi_dump.txt`, `F10` wymusza wygraną (test ekranu końca gry), `F11` zaczyna grę z identycznymi kartami w magazynach (test rozstrzygania z talii).
+
+## Aktualizacje
+
+Gra przy starcie (w tle) sprawdza w GitHub Releases tego repozytorium, czy jest nowsza wersja, tak samo jak Pasjans Dziadkowy. Jeśli jest, pyta o zgodę, pobiera `Garibaldi.exe`, podmienia plik i uruchamia się ponownie (zapisana gra zostaje). Sprawdzanie przy starcie można wyłączyć w oknie zasad. Numer wersji i data budowy są na początku okna zasad.
+
+Aby opublikować nową wersję: zmień `APP_VERSION` w `src/main.cpp`, zbuduj `Garibaldi.exe`, utwórz Release z tagiem `vMAJOR.MINOR.PATCH` (zgodnym z `APP_VERSION`) i dołącz do niego plik dokładnie o nazwie `Garibaldi.exe`. Opis wydania jest pokazywany użytkownikom jako „Co nowego”.
 
 ## Budowanie ze źródeł
 

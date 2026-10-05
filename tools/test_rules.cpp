@@ -177,6 +177,31 @@ int main(){
       bool order=fndSuit(0)==Spades&&fndSuit(1)==Spades&&fndSuit(2)==Hearts&&fndSuit(3)==Hearts&&fndSuit(4)==Diamonds&&fndSuit(5)==Diamonds&&fndSuit(6)==Clubs&&fndSuit(7)==Clubs;
       CHECK(order,"slot order follows the seniority of suits (spades, hearts, diamonds, clubs)");
    }
+   // --- 11. A click moves the card to the best of ALL legal moves; the waste pile only when there is none.
+   {
+      // turned king, only legal move: an empty column (low value for the computer, but a legal move)
+      Game g=empty();
+      g.pile[resId(0)]={mk(Spades,3,0,false),mk(Hearts,7,0)};
+      g.pile[resId(1)]={mk(Hearts,5,1,false),mk(Hearts,6,1)};
+      g.pile[turnedId(0)]={mk(Spades,13,0)};
+      for(int j=0;j<7;j++) g.pile[tabId(j)]={mk(Clubs,2,1)};                 // column 7 is empty
+      Move m;
+      CHECK(bestClickMove(g,turnedId(0),m)&&m.dst==tabId(7),"turned king: the empty column is chosen, not the waste pile");
+      // turned card whose only legal move is onto the OPPONENT's waste pile (a move the computer finds worthless)
+      Game h=empty();
+      h.pile[resId(0)]={mk(Spades,3,0,false),mk(Hearts,7,0)};
+      h.pile[resId(1)]={mk(Hearts,5,1,false),mk(Hearts,6,1)};
+      h.pile[wasteId(1)]={mk(Diamonds,6,1)};
+      h.pile[turnedId(0)]={mk(Diamonds,7,0)};
+      for(int j=0;j<8;j++) h.pile[tabId(j)]={mk(Clubs,2,1)};
+      CHECK(bestClickMove(h,turnedId(0),m)&&m.dst==wasteId(1),"turned 7 of diamonds: laid on the opponent's 6 of diamonds, not discarded");
+      // a column card whose only legal move is onto the opponent's waste pile
+      Game k=h; k.pile[turnedId(0)].clear(); k.pile[tabId(0)]={mk(Clubs,9,1),mk(Diamonds,7,0)};
+      CHECK(bestClickMove(k,tabId(0),m)&&m.dst==wasteId(1),"a column card also goes onto the opponent's waste when that is its only move");
+      // nothing fits anywhere: no move
+      Game n=h; n.pile[turnedId(0)]={mk(Spades,9,0)};
+      CHECK(!bestClickMove(n,turnedId(0),m),"no legal move at all: no move (the turned card is then discarded by the caller)");
+   }
    printf(fails?"\n%d FAILED\n":"\nall passed\n",fails);
    return fails?1:0;
 }
