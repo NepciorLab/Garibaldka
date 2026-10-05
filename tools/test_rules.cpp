@@ -50,6 +50,22 @@ int main(){
       Move m{resId(0),tabId(7)};
       CHECK(scoreMove(g,m,0,ctx,2)>0,"magazine card to empty column is played when the uncovered card is safe");
    }
+   // --- 2b. A free column is kept: a card that fits onto another card goes there (click and computer), whether it
+   //         comes from the magazine or is the turned card.
+   for(int srcKind=0;srcKind<2;srcKind++){
+      Game g=empty();
+      Card c=mk(Hearts,6,0);                                  // red 6: fits onto the black 7 of column 1
+      if(srcKind==0) g.pile[resId(0)]={mk(Spades,3,0,false),c}; else { g.pile[resId(0)]={mk(Spades,3,0)}; g.pile[turnedId(0)]={c}; }
+      g.pile[resId(1)]={mk(Hearts,9,1,false),mk(Hearts,9,1)};
+      g.pile[tabId(0)]={mk(Clubs,7,1)};
+      for(int j=1;j<4;j++) g.pile[tabId(j)]={mk(Clubs,2+j,1)};   // columns 5-8 are empty
+      int src=srcKind==0?resId(0):turnedId(0);
+      Move best; bool f=bestClickMove(g,src,best);
+      CHECK(f&&best.dst==tabId(0),srcKind==0?"click: magazine card goes onto the card, not onto the free column":"click: turned card goes onto the card, not onto the free column");
+      AIContext cx; Move out; bool found=false;
+      for(const Move& m:legalMoves(g,0)) if(m.src==src && ptype(m.dst)==PT_TAB && g.pile[m.dst].empty()) found|=scoreMove(g,m,0,cx,2)>scoreMove(g,{src,tabId(0)},0,cx,2);
+      CHECK(!found,"the free column never beats the card in the valuation");
+   }
    // --- 3. Obligation: a turned ace is always played on the foundation (every level).
    for(int lvl=0;lvl<3;lvl++){
       Game g=empty();

@@ -449,6 +449,11 @@ inline float scoreMove(const Game& g,const Move& m,int p,const AIContext& ctx,in
       } else {
          if(st==PT_RES) sc+=100; else if(c.rank==13) sc+=20; else sc-=60;
       }
+      // A free column is worth keeping: when the card can also go onto another card, it goes there
+      // (simulations: no difference in strength, but the click and the computer no longer waste the free place).
+      if(!t){
+         for(int j=0;j<NUM_TAB;j++){ int id=tabId(j); if(id!=m.dst && id!=m.src && !g.pile[id].empty() && g.canPlace(c,id,p,m.src)){ sc-=300; break; } }
+      }
    }
    // 7: waste and turned card
    if(st==PT_WASTE){
