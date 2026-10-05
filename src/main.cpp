@@ -2255,6 +2255,10 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
       dealTick(now);
       revealTick(now);
       netTick(now);
+      { static double lastSave=0; static std::string lastText;       // autosave: a killed program or a crash loses nothing
+        if(now-lastSave>0.4){ lastSave=now;
+           std::string t=g_net.playing?std::string():g_game.over?std::string("over"):g_game.serialize();
+           if(t!=lastText){ lastText=t; saveGame(); } } }
       { static double lastPing=0;                      // the server connection is kept alive (answered by the server with #PONG)
         if(g_net.online&&g_ws.connected()&&now-lastPing>20.0){ g_ws.sendLine("#PING"); lastPing=now; } }
       aiTick(now);
