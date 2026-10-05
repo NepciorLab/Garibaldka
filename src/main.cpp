@@ -322,6 +322,71 @@ static int    g_hoverBtn=-1;
 static std::string g_log;               // move log (shown in the F9 dump)
 static void logf(const char* who,int a=-1,int b=-1){ char t[96]; sprintf(t,"%.2f %s %d->%d turn=%d\n",nowSec()-0,who,a,b,g_game.turn); g_log+=t; }
 
+// ---------------------------------------------------------------------------
+// Permanent record of every game and every action, for analysing how sensible the moves were
+// (file garibaldka_ruchy.log next to the program). One line per action: who did what, which moves were legal at that
+// moment, and the whole game state before the action (so any position can be reloaded and examined).
+// ---------------------------------------------------------------------------
+static std::string recPile(int id){
+   static const char* N[]={"res","hand","turned","waste"};
+   char b[24];
+   switch(ptype(id)){
+      case PT_TAB: sprintf(b,"col%d",id-8+1); break;
+      case PT_FND: sprintf(b,"fnd%d",id-16+1); break;
+      default: sprintf(b,"%s.%s",N[id/2],id%2?"opp":"me"); break;
+   }
+   return b;
+}
+static std::string recCard(const Card& c){ return c.imgKey()+(c.deck?"'":""); }
+static void recWrite(const std::string& line){
+   static std::wstring path;
+   if(path.empty()){ wchar_t b[MAX_PATH]; GetModuleFileNameW(nullptr,b,MAX_PATH); path=b; size_t k=path.find_last_of(L"\\/"); path=path.substr(0,k+1)+L"garibaldka_ruchy"+g_instTag+L".log"; }
+   FILE* f=_wfopen(path.c_str(),L"ab"); if(!f) return;
+   fwrite(line.data(),1,line.size(),f);
+   long sz=ftell(f); fclose(f);
+   if(sz>12*1024*1024){ std::wstring old=path+L".old"; DeleteFileW(old.c_str()); MoveFileW(path.c_str(),old.c_str()); }   // the log stays bounded
+}
+static std::string recStamp(){ time_t t=time(nullptr); char b[32]; strftime(b,sizeof b,"%Y-%m-%d %H:%M:%S",localtime(&t)); return b; }
+static void recGameStart(bool network){
+   char b[256]; sprintf(b,"\nGAME %s app=%ls seed=%u mode=%s level=%d startHow=%d\n",recStamp().c_str(),APP_VERSION,(unsigned)g_game.seed,network?"network":"computer",g_level,g_game.startHow);
+   recWrite(b);
+}
+static void recGameEnd(){
+   char b[160]; sprintf(b,"END %s winner=%d(0=me,1=opp,-1=draw) turns=%d left_me=%d left_opp=%d\n",recStamp().c_str(),g_game.winner,g_game.totalTurns,g_game.remaining(0),g_game.remaining(1));
+   recWrite(b);
+}
+// who: 'H' human, 'A' computer, 'N' the opponent over the network. `g` = state BEFORE the action, p = the acting player.
+static void recAction(const Game& g,char who,int p,StepKind kind,int src=-1,int dst=-1){
+   std::string a;
+   switch(kind){
+      case ST_MOVE:{ const Card* c=g.srcTop(src,p); a="MOVE "+(c?recCard(*c):std::string("?"))+" "+recPile(src)+"->"+recPile(dst); break; }
+      case ST_DRAW:    a="DRAW"; break;
+      case ST_DISCARD:{ const Card* c=g.top(turnedId(p)); a="DISCARD "+(c?recCard(*c):std::string("?")); break; }
+      default:         a="PASS"; break;
+   }
+   // everything that was possible (the turned card, magazine, waste, the column tops)
+   std::string legal; int nLegal=0, nTabMoves=0, empties=0;
+   for(int j=0;j<NUM_TAB;j++) if(g.pile[tabId(j)].empty()) empties++;
+   int srcs[3+NUM_TAB]={resId(p),turnedId(p),wasteId(p)}; for(int j=0;j<NUM_TAB;j++) srcs[3+j]=tabId(j);
+   for(int sId:srcs){
+      const Card* c=g.srcTop(sId,p); if(!c) continue;
+      for(int d=0;d<NP;d++) if(g.canMove(sId,d,p)){
+         nLegal++; if(ptype(d)==PT_TAB||ptype(d)==PT_FND) nTabMoves++;
+         if(nLegal<=24){ legal+=" "+recCard(*c)+":"+recPile(sId)+">"+recPile(d); }
+      }
+   }
+   std::string flags;
+   if(kind==ST_DISCARD){
+      const Card* c=g.top(turnedId(p));
+      bool fits=false; for(int d=0;c&&d<NP;d++) if(g.canMove(turnedId(p),d,p)) fits=true;
+      if(fits) flags+=" CHECK:discard-although-the-turned-card-could-be-played";
+      if(empties>0) flags+=" CHECK:discard-with-free-column";
+   }
+   if(kind==ST_DRAW||kind==ST_DISCARD||kind==ST_PASS){ Move m; if(g.mandatory(p,m)) flags+=" CHECK:foundation-move-left"; }
+   char head[160]; sprintf(head,"T%d %c%d level=%d free_cols=%d legal=%d %s",g.totalTurns,who,p,who=='A'?g_level:-1,empties,nLegal,a.c_str());
+   recWrite(std::string(head)+flags+"\n   legal:"+legal+"\n   S "+g.serialize()+"\n");
+}
+
 enum { B_NEW,B_UNDO,B_HINT,B_DRAW,B_DISCARD,B_LEVEL,B_NET,B_SOUND,B_RULES,B_COUNT };
 struct Btn{ float x,y,w,h; };
 static Btn g_btn[B_COUNT];
@@ -404,7 +469,7 @@ static void onGameOver(){
    else if(g_game.winner==1){ snd("koniec");
       setStatus(all?oppName()+L" pozbył się wszystkich kart. Przegrana.":L"Po 400 turach "+oppName()+L" ma mniej kart do zagrania. Przegrana."); }
    else { snd("koniec"); setStatus(L"Remis: nikt nie może już zagrać."); }
-   netReportResult();
+   netReportResult(); recGameEnd();
    g_dirty=true;
 }
 static void afterAnyMove(){
@@ -505,6 +570,7 @@ static void newGameStart(bool network=false,uint32_t netSeed=0){
       g_game.newGame(netSeed,false);
       if(!g_net.host) g_game=g_game.mirrored();      // the guest sees itself at the bottom
    } else g_game.newGame(g_forceTie);
+   recGameStart(network);
    for(Vis& v:V) v=Vis();
    relayout(true);
    // stage 0: both decks lie in one pile (the cards of the two decks mixed)
@@ -776,15 +842,15 @@ static void netApply(const std::string& l){
       int a=-1,b=-1; if(sscanf(l.c_str()+1,"%d %d",&a,&b)!=2||a<0||a>=NP||b<0||b>=NP){ netDesync(L"błędny ruch"); return; }
       int src=Game::mirrorPile(a), dst=Game::mirrorPile(b);
       if(!g_game.canMove(src,dst,1)){ netDesync(L"niedozwolony ruch przeciwnika"); return; }
-      g_game.doMove(src,dst,1); snd("click"); afterAnyMove();
+      recAction(g_game,'N',1,ST_MOVE,src,dst); g_game.doMove(src,dst,1); snd("click"); afterAnyMove();
    } else if(c=='D'){
       if(!g_game.canDraw(1)){ netDesync(L"niedozwolone dobranie"); return; }
-      g_game.draw(1); snd("click"); afterAnyMove();
+      recAction(g_game,'N',1,ST_DRAW); g_game.draw(1); snd("click"); afterAnyMove();
    } else if(c=='X'){
       if(g_game.pile[turnedId(1)].empty()){ netDesync(L"niedozwolone odrzucenie"); return; }
-      g_game.discard(1); snd("click"); afterAnyMove(); if(!g_game.over) statusForTurn();
+      recAction(g_game,'N',1,ST_DISCARD); g_game.discard(1); snd("click"); afterAnyMove(); if(!g_game.over) statusForTurn();
    } else if(c=='P'){
-      g_game.endTurn(); snd("click"); afterAnyMove(); if(!g_game.over) statusForTurn();
+      recAction(g_game,'N',1,ST_PASS); g_game.endTurn(); snd("click"); afterAnyMove(); if(!g_game.over) statusForTurn();
    } else if(c=='F'){
       g_game.endTurn(); snd("nono"); afterAnyMove();
       if(!g_game.over){ statusForTurn(); setStatus(g_net.peerNick+L" zapomniał dołożyć karty do fundamentu i traci turę.",false,4); }
@@ -840,7 +906,7 @@ static void humanDraw(){
    Move m;
    if(g_game.mandatory(0,m)){ loseTurnForForgetting(m); return; }
    if(!g_game.canDraw(0)){ snd("nono"); setStatus(L"Talia i śmietnik są puste. Użyj „Pas”.",true,3); return; }
-   pushUndo(); logf("humanDraw"); g_game.draw(0); netLocal("D",false); snd("click"); afterAnyMove(); statusForTurn();
+   pushUndo(); logf("humanDraw"); recAction(g_game,'H',0,ST_DRAW); g_game.draw(0); netLocal("D",false); snd("click"); afterAnyMove(); statusForTurn();
 }
 static void humanDiscard(){
    if(!humanTurn()) return;
@@ -848,7 +914,7 @@ static void humanDiscard(){
    if(!hasTurned && g_game.canDraw(0)) return;            // pass is only possible with nothing left to draw
    Move m;
    if(g_game.mandatory(0,m)){ loseTurnForForgetting(m); return; }
-   pushUndo(); logf(hasTurned?"humanDiscard":"humanPass");
+   pushUndo(); logf(hasTurned?"humanDiscard":"humanPass"); recAction(g_game,'H',0,hasTurned?ST_DISCARD:ST_PASS);
    if(hasTurned) g_game.discard(0); else g_game.endTurn();
    netLocal(hasTurned?"X":"P",true);
    snd("click"); afterAnyMove(); endHumanTurnIfSwitched();
@@ -859,7 +925,7 @@ static void humanMove(int src,int dst,bool undoable=true){
       if(breaksObligation(g_game,0,dst) && g_game.mandatory(0,must)){ loseTurnForForgetting(must); return; }   // forgot a foundation move
       pushUndo();
    }
-   logf("humanMove",src,dst); g_game.doMove(src,dst,0); netLocal("M "+std::to_string(src)+" "+std::to_string(dst),false); snd("click"); afterAnyMove();
+   logf("humanMove",src,dst); recAction(g_game,'H',0,ST_MOVE,src,dst); g_game.doMove(src,dst,0); netLocal("M "+std::to_string(src)+" "+std::to_string(dst),false); snd("click"); afterAnyMove();
    if(!g_game.over) statusForTurn();
 }
 // Undo: restores the state from before the player's last action (a move, drawing, discarding, passing, or a whole
@@ -2016,7 +2082,9 @@ static void aiTick(double now){
    if(g_net.playing) return;                    // the opponent is a person: his actions come over the network
    if(g_game.over||g_game.turn!=1||now<g_dealUntil||now<g_aiAt) return;
    if(uiBusy(now)) return;
+   Game before=g_game;
    Step s=aiStep(g_game,1,g_ctx,g_level);
+   recAction(before,'A',1,s.kind,s.m.src,s.m.dst);
    logf("ai",s.m.src,s.m.dst);
    snd("click");
    afterAnyMove();

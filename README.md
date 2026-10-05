@@ -68,3 +68,7 @@ Wynik: `build/Garibaldi.exe`. Test silnika bez grafiki (komputer kontra komputer
 * `res/` – karty PNG, ikony, dźwięki (z Pasjansa Dziadkowego).
 
 Licencja kodu przejętego z Pasjansa Dziadkowego: MIT (plik `LICENSE`).
+
+## Zapis ruchów
+
+Gra zapisuje każdą partię i każdy ruch (także komputera i przeciwnika w sieci) do pliku `garibaldka_ruchy.log` obok programu: kto, co zagrał, jakie ruchy były wtedy możliwe i pełny stan gry przed ruchem. Podejrzane decyzje są oznaczone słowem CHECK (np. odrzucenie karty, którą dało się zagrać). Plik nie rośnie ponad ok. 12 MB (starsza część trafia do `.old`).
