@@ -20,6 +20,6 @@ Invoke-Zig @("rc","-I","res","res/cards.rc","build/cards_res.res")
 Invoke-Zig @(
    "c++","-target","x86_64-windows-gnu","-std=c++17",$Opt,"-mwindows","-Wl,--subsystem,windows","-static",
    "-o","build/$Out","src/main.cpp","build/app_res.res","build/cards_res.res",
-   "-ld2d1","-ldwrite","-lwindowscodecs","-ldsound","-lwinmm","-lole32","-lgdi32","-luser32","-lshell32","-luuid","-lwinhttp"
+   "-ld2d1","-ldwrite","-lwindowscodecs","-ldsound","-lwinmm","-lole32","-lgdi32","-luser32","-lshell32","-luuid","-lwinhttp","-lws2_32"
 )
 "OK build/$Out"

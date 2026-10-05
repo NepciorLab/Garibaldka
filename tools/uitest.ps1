@@ -2,8 +2,8 @@
 # (nothing is injected into the desktop, other windows are never touched) and saves screenshots
 # of that window only (PrintWindow).
 #   powershell -ExecutionPolicy Bypass -File tools/uitest.ps1 -Actions "click 538 750; wait 900; shot a.png"
-# Actions: click X Y | drag X0 Y0 X1 Y1 | dbl X Y | key VK_DEC | wait MS | shot NAME   (client coordinates)
-param([string]$Actions)
+# Actions: chars TEXT | char CODE | click X Y | drag X0 Y0 X1 Y1 | dbl X Y | key VK_DEC | wait MS | shot NAME   (client coordinates)
+param([string]$Actions,[int]$Which=1)
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;using System.Runtime.InteropServices;
@@ -16,7 +16,7 @@ public class U{
  public static IntPtr LP(int x,int y){return (IntPtr)((y<<16)|(x&0xFFFF));}
 }
 "@
-$p=Get-Process Garibaldi -ErrorAction Stop | Select -First 1
+$p=(Get-Process Garibaldi -ErrorAction Stop | Sort-Object StartTime)[$Which-1]
 $h=$p.MainWindowHandle
 function Msg($m,$w,$x,$y){[U]::PostMessage($h,$m,[IntPtr]$w,[U]::LP($x,$y))|Out-Null}
 foreach($a in $Actions.Split(';')){
@@ -29,6 +29,8 @@ foreach($a in $Actions.Split(';')){
            1..14|%{ Msg 0x200 1 ([int]($x0+($x1-$x0)*$_/14)) ([int]($y0+($y1-$y0)*$_/14)); Start-Sleep -Milliseconds 25 }
            Start-Sleep -Milliseconds 80; Msg 0x202 0 $x1 $y1}
   'key'   {[U]::PostMessage($h,0x100,[IntPtr][int]$t[1],[IntPtr]0)|Out-Null}
+  'chars' {foreach($ch in $a.Trim().Substring(6).ToCharArray()){ [U]::PostMessage($h,0x102,[IntPtr][int]$ch,[IntPtr]0)|Out-Null; Start-Sleep -Milliseconds 15 }}
+  'char'  {[U]::PostMessage($h,0x102,[IntPtr][int]$t[1],[IntPtr]0)|Out-Null}
   'wait'  {Start-Sleep -Milliseconds ([int]$t[1])}
   'shot'  {$r=New-Object U+RECT;[U]::GetWindowRect($h,[ref]$r)|Out-Null
            $b=New-Object System.Drawing.Bitmap ($r.R-$r.L),($r.B-$r.T); $g=[System.Drawing.Graphics]::FromImage($b)

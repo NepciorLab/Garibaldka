@@ -1,0 +1,15 @@
+{
+  "name": "garibaldka-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Online server for Garibaldka: rooms, unique nicknames, match statistics (Cloudflare Workers + Durable Objects)",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node test/protocol.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

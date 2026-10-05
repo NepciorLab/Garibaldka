@@ -1,7 +1,7 @@
 build/
 *.sav
 *.ini
-garibaldi_dump.txt
+garibaldi_dump*.txt
 garibaldka.html
 Garibaldi.exe
-Sounds/
+/Sounds/

@@ -6,6 +6,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define UNICODE
 #include "game.h"
+#include "net.h"
+#include <deque>
 #include <windows.h>
 #include <windowsx.h>
 #include <d2d1.h>
@@ -43,7 +45,7 @@ static bool  g_muted=false;
 static int   g_volPct=100;
 // Version of this build. A release on GitHub is tagged vMAJOR.MINOR.PATCH with the same number and carries
 // an asset called Garibaldi.exe: the updater (update.h) compares the tag with this number.
-static const wchar_t* APP_VERSION = L"1.0.1";
+static const wchar_t* APP_VERSION = L"1.1.0";
 static bool  g_checkUpdates=true;     // check GitHub for a newer release at startup
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -61,6 +63,30 @@ static std::wstring buildDateText(){   // "5 października 2026", from the compi
 #endif
 bool isSoundMuted(){ return g_muted; }
 
+// ---------------------------------------------------------------------------
+// Network play (see net.h). Both computers run the same deterministic game from the same seed and send only the
+// player's ACTIONS. Each computer shows itself as player 0 (bottom row): the guest plays a mirrored copy of the
+// game (Game::mirrored()), so piles are translated with Game::mirrorPile() when actions are sent/received.
+// ---------------------------------------------------------------------------
+static std::wstring g_instTag;                       // ".i2" for a second copy on the same computer (testing)
+struct NetState{
+   bool listening=false, connecting=false, connected=false, playing=false, host=false, rematchAsked=false;
+   bool online=false, pendingCreate=false;           // online: through the server (rooms), otherwise a direct link
+   std::string pendingCode, roomCode; int gameNo=0;  // gameNo: counts the games of this meeting (for the result report)
+   int h2hW=0,h2hL=0,h2hD=0; bool hasH2h=false;     // my record against this opponent (from the server)
+   std::wstring peerNick; std::string peerVer;
+   std::deque<std::string> inbox;                    // the opponent's actions waiting to be played (animated one by one)
+};
+static NetState g_net;
+static net::Conn g_conn;                             // direct link (local network)
+static net::WsConn g_ws;                             // link to the online server
+static net::Link* g_link=&g_conn;                    // the one in use
+// Where the online server lives. Empty = the player has to type it in the network panel.
+static const wchar_t* DEFAULT_SERVER=L"https://garibaldka.garibaldka-server.workers.dev";
+static std::wstring g_serverW, g_inviteW, g_codeW;
+static std::string g_secret;                         // the player's secret key: it proves that a nick is his (kept in the .ini)
+static std::wstring g_nickW=L"Gracz", g_ipW;
+static std::wstring oppName(){ return g_net.playing ? g_net.peerNick : std::wstring(L"Komputer"); }
 static const wchar_t* LEVEL_NAMES[]={L"Łatwy",L"Normalny",L"Trudny"};
 static const float TB=58.f, SB=28.f;     // toolbar / status bar heights
 
@@ -296,7 +322,7 @@ static int    g_hoverBtn=-1;
 static std::string g_log;               // move log (shown in the F9 dump)
 static void logf(const char* who,int a=-1,int b=-1){ char t[96]; sprintf(t,"%.2f %s %d->%d turn=%d\n",nowSec()-0,who,a,b,g_game.turn); g_log+=t; }
 
-enum { B_NEW,B_UNDO,B_HINT,B_DRAW,B_DISCARD,B_LEVEL,B_SOUND,B_RULES,B_COUNT };
+enum { B_NEW,B_UNDO,B_HINT,B_DRAW,B_DISCARD,B_LEVEL,B_NET,B_SOUND,B_RULES,B_COUNT };
 struct Btn{ float x,y,w,h; };
 static Btn g_btn[B_COUNT];
 
@@ -310,7 +336,7 @@ static bool humanTurn(){ return !g_game.over && g_game.turn==0 && nowSec()>=g_de
 
 static void statusForTurn(){
    if(g_game.over) return;
-   if(g_game.turn==1){ setStatus(L"Komputer gra…"); return; }
+   if(g_game.turn==1){ setStatus(oppName()+L" gra…"); return; }
    if(!g_game.pile[turnedId(0)].empty()) setStatus(L"Zagraj dobraną kartę albo odrzuć ją na śmietnik (kończy turę).");
    else setStatus(L"Twój ruch: zagraj karty lub dobierz z talii.");
 }
@@ -318,7 +344,7 @@ static void statusForTurn(){
 static std::wstring iniPath(){
    wchar_t b[MAX_PATH]; GetModuleFileNameW(nullptr,b,MAX_PATH);
    std::wstring s=b; size_t d=s.find_last_of(L'.'); if(d!=std::wstring::npos) s.resize(d);
-   return s+L".ini";
+   return s+g_instTag+L".ini";
 }
 static void saveSettings(){
    auto ini=iniPath(); wchar_t b[32];
@@ -326,6 +352,11 @@ static void saveSettings(){
    wsprintfW(b,L"%d",g_muted?1:0); WritePrivateProfileStringW(L"Settings",L"Muted",b,ini.c_str());
    wsprintfW(b,L"%d",g_volPct); WritePrivateProfileStringW(L"Settings",L"Volume",b,ini.c_str());
    WritePrivateProfileStringW(L"Settings",L"CheckUpdatesOnStart",g_checkUpdates?L"1":L"0",ini.c_str());
+   WritePrivateProfileStringW(L"Network",L"Nick",g_nickW.c_str(),ini.c_str());
+   WritePrivateProfileStringW(L"Network",L"JoinAddress",g_ipW.c_str(),ini.c_str());
+   WritePrivateProfileStringW(L"Network",L"Server",g_serverW.c_str(),ini.c_str());
+   WritePrivateProfileStringW(L"Network",L"Invite",g_inviteW.c_str(),ini.c_str());
+   WritePrivateProfileStringW(L"Network",L"Secret",net::fromUtf8(g_secret).c_str(),ini.c_str());
    WINDOWPLACEMENT wp={sizeof(wp)};
    if(GetWindowPlacement(g_hwnd,&wp)){
       wchar_t w[128]; wsprintfW(w,L"%d,%d,%d,%d,%d",wp.rcNormalPosition.left,wp.rcNormalPosition.top,
@@ -339,6 +370,16 @@ static void loadSettings(){
    g_muted=GetPrivateProfileIntW(L"Settings",L"Muted",0,ini.c_str())!=0;
    g_volPct=(int)GetPrivateProfileIntW(L"Settings",L"Volume",100,ini.c_str()); g_volPct=std::max(0,std::min(100,g_volPct));
    g_checkUpdates=GetPrivateProfileIntW(L"Settings",L"CheckUpdatesOnStart",1,ini.c_str())!=0;
+   { wchar_t b[128]={}; GetPrivateProfileStringW(L"Network",L"Nick",L"Gracz",b,128,ini.c_str()); g_nickW=b; if(g_nickW.empty()) g_nickW=L"Gracz";
+     GetPrivateProfileStringW(L"Network",L"JoinAddress",L"",b,128,ini.c_str()); g_ipW=b;
+     GetPrivateProfileStringW(L"Network",L"Server",DEFAULT_SERVER,b,128,ini.c_str()); g_serverW=b;
+     GetPrivateProfileStringW(L"Network",L"Invite",L"",b,128,ini.c_str()); g_inviteW=b;
+     GetPrivateProfileStringW(L"Network",L"Secret",L"",b,128,ini.c_str()); g_secret=net::toUtf8(b);
+     if(g_secret.size()<16){                           // first run: make the key that proves that the nick is mine
+        std::random_device rd; char h[16]; g_secret.clear();
+        for(int i=0;i<4;i++){ sprintf(h,"%08x",(unsigned)rd()); g_secret+=h; }
+        WritePrivateProfileStringW(L"Network",L"Secret",net::fromUtf8(g_secret).c_str(),ini.c_str());
+     } }
 }
 static void snd(const char* k){ playSound(k,g_volPct/100.f); }
 
@@ -347,6 +388,12 @@ static void snd(const char* k){ playSound(k,g_volPct/100.f); }
 // ============================================================================
 static bool uiBusy(double now){ return anyAnimating(now)||g_prev.active||g_start.active||g_rev.active||g_deal.active; }
 
+// Online: tell the server how this game ended for me (it counts a result only when both players report the same).
+static void netReportResult(){
+   if(!g_net.playing||!g_net.online) return;
+   char b[48]; sprintf(b,"#RESULT %d %c",g_net.gameNo,g_game.winner==0?'W':g_game.winner==1?'L':'D');
+   g_ws.sendLine(b);
+}
 static void onGameOver(){
    if(g_overShown) return;
    g_overShown=true; g_overAt=nowSec(); g_prev.active=false; g_start.active=false;
@@ -355,8 +402,9 @@ static void onGameOver(){
    if(g_game.winner==0){ snd("sukces"); g_fw.start((int)G.w,(int)G.h); g_fwLast=nowSec();
       setStatus(all?L"Wygrywasz! Pozbyłeś się wszystkich kart.":L"Wygrywasz! Po 400 turach masz mniej kart do zagrania."); }
    else if(g_game.winner==1){ snd("koniec");
-      setStatus(all?L"Komputer pozbył się wszystkich kart. Przegrana.":L"Po 400 turach komputer ma mniej kart do zagrania. Przegrana."); }
+      setStatus(all?oppName()+L" pozbył się wszystkich kart. Przegrana.":L"Po 400 turach "+oppName()+L" ma mniej kart do zagrania. Przegrana."); }
    else { snd("koniec"); setStatus(L"Remis: nikt nie może już zagrać."); }
+   netReportResult();
    g_dirty=true;
 }
 static void afterAnyMove(){
@@ -371,10 +419,11 @@ static void afterAnyMove(){
 static std::wstring savePath(){
    wchar_t b[MAX_PATH]; GetModuleFileNameW(nullptr,b,MAX_PATH);
    std::wstring s=b; size_t d=s.find_last_of(L'.'); if(d!=std::wstring::npos) s.resize(d);
-   return s+L".sav";
+   return s+g_instTag+L".sav";
 }
 static void saveGame(){
    auto path=savePath();
+   if(g_net.playing) return;                                 // a network game is not saved
    if(g_game.over){ DeleteFileW(path.c_str()); return; }   // a finished game is not kept
    std::string text=g_game.serialize();
    FILE* f=_wfopen(path.c_str(),L"wb"); if(!f) return;
@@ -448,11 +497,14 @@ static void dealTick(double now){
 }
 static bool g_forceTie=false;     // debug key F11
 static std::vector<Game> g_hist;  // snapshots for undo (one before every action of the player)
-static void newGameStart(){
+static void newGameStart(bool network=false,uint32_t netSeed=0){
    SoundSystem::instance().fadeOutAll(150);
    g_fw.stop(); g_overShown=false; g_prev.active=false; g_start.active=false; g_rev.active=false; g_deal.active=false;
    g_drag=decltype(g_drag)(); g_dragging=false; g_plan.active=false; g_hist.clear();
-   g_game.newGame(g_forceTie);
+   if(network){                                     // both computers deal the same game from the same seed
+      g_game.newGame(netSeed,false);
+      if(!g_net.host) g_game=g_game.mirrored();      // the guest sees itself at the bottom
+   } else g_game.newGame(g_forceTie);
    for(Vis& v:V) v=Vis();
    relayout(true);
    // stage 0: both decks lie in one pile (the cards of the two decks mixed)
@@ -486,13 +538,13 @@ static void newGameStart(){
    const bool me=g_game.turn==0;
    switch(g_game.startHow){
    case Game::SH_MAG_SUIT:
-      setStatus(me?L"Takie same figury w magazynach: zaczynasz, bo Twój kolor jest starszy (pik, kier, karo, trefl).":
-                   L"Takie same figury w magazynach: komputer zaczyna, bo jego kolor jest starszy (pik, kier, karo, trefl)."); break;
+      setStatus(me?std::wstring(L"Takie same figury w magazynach: zaczynasz, bo Twój kolor jest starszy (pik, kier, karo, trefl).")
+                  :std::wstring(L"Takie same figury w magazynach: ")+oppName()+L" zaczyna, bo jego kolor jest starszy (pik, kier, karo, trefl)."); break;
    case Game::SH_HAND_RANK: case Game::SH_HAND_SUIT:
-      setStatus(me?L"Identyczne karty w magazynach: rozstrzygnęły karty odkryte z talii. Zaczynasz.":
-                   L"Identyczne karty w magazynach: rozstrzygnęły karty odkryte z talii. Komputer zaczyna."); break;
+      setStatus(me?std::wstring(L"Identyczne karty w magazynach: rozstrzygnęły karty odkryte z talii. Zaczynasz.")
+                  :std::wstring(L"Identyczne karty w magazynach: rozstrzygnęły karty odkryte z talii. Zaczyna ")+oppName()+L"."); break;
    default:
-      setStatus(me?L"Zaczynasz: masz starszą kartę w magazynie.":L"Komputer zaczyna: ma starszą kartę w magazynie.");
+      setStatus(me?std::wstring(L"Zaczynasz: masz starszą kartę w magazynie."):oppName()+L" zaczyna: ma starszą kartę w magazynie.");
    }
    if(!me) g_aiAt=g_dealUntil+0.4;
 }
@@ -507,6 +559,245 @@ static bool loadSavedGame(){
    if(g_game.turn==1) g_aiAt=nowSec()+0.8;
    setStatus(L"Wczytano ostatnią grę.",false,3.5);
    return true;
+}
+
+// ============================================================================
+// Network play: protocol and the opponent's actions
+// ----------------------------------------------------------------------------
+// Lines (UTF-8): HELLO <version> <nick> | START <seed> | M <src> <dst> | D | X <hash> | P <hash> | F <hash> |
+//                CHAT <text> | EMO <n> | REMATCH | REMATCH_OK | REMATCH_NO | BYE
+//   M move, D draw, X discard (turn ends), P pass (turn ends), F forgot the foundation obligation (turn lost).
+//   The three turn-ending actions carry, in the SAME line, the fingerprint of the whole game after the action
+//   ("X <hash>"); the other side applies the action and compares at once, before anybody can move.
+// Pile ids in M are those of the SENDER; the receiver translates them with Game::mirrorPile().
+// ============================================================================
+struct ChatLine{ std::wstring who, text; bool mine; };
+static std::vector<ChatLine> g_chatLog;
+struct ChatUi{ bool open=false; std::wstring input; int unread=0; };
+static ChatUi g_chat;
+struct EmoteShow{ int idx; int who; double t0; };
+static std::vector<EmoteShow> g_emotes;
+static const int NUM_EMOTES=8;
+static const wchar_t* EMOJIS[NUM_EMOTES]={L"\U0001F44D",L"\U0001F600",L"\U0001F62E",L"\U0001F622",L"\U0001F621",L"\U0001F525",L"\U0001F44F",L"\U0001F914"};
+
+struct NetPanel{ bool open=false; int focus=0; int tab=1; std::wstring info; };
+static NetPanel g_np;
+static std::vector<std::string> g_myAddrs;
+
+static uint64_t netStateHash(){ return g_net.host ? g_game.hash() : g_game.mirrored().hash(); }   // always of the CANONICAL (host's) view
+static void netSend(const std::string& s){ if(g_net.connected) g_link->sendLine(s); }     // a game message to the opponent
+static void serverSend(const std::string& s){ g_ws.sendLine(s); }                       // a command to the online server
+// Called right after the player's own action; `turnEnded` also sends the fingerprint of the resulting game.
+static void netLocal(const std::string& line,bool turnEnded){
+   if(!g_net.playing) return;
+   if(turnEnded){ char b[48]; sprintf(b," %llx",(unsigned long long)netStateHash()); netSend(line+b); }
+   else netSend(line);
+}
+static bool netBusy(){ return g_net.listening||g_net.connecting||g_net.connected||g_net.playing; }
+static void netReset(){ g_conn.close(); g_ws.close(); g_link=&g_conn; g_net=NetState(); g_emotes.clear(); }
+
+static void startNetGame(uint32_t seed){
+   g_net.playing=true; g_net.rematchAsked=false; g_net.inbox.clear(); g_np.open=false; g_emotes.clear(); g_net.gameNo++;
+   g_hist.clear();
+   newGameStart(true,seed);
+}
+// the network game is over (connection lost / left): back to a normal game against the computer
+static void netLeave(const wchar_t* message){
+   bool wasPlaying=g_net.playing;
+   netReset(); g_np.info=message?message:L"";
+   if(wasPlaying){
+      if(message) MessageBoxW(g_hwnd,message,L"Gra sieciowa",MB_OK|MB_ICONINFORMATION);
+      newGameStart();
+   }
+   g_dirty=true;
+}
+static void netDesync(const wchar_t* why){
+   { std::string w=net::toUtf8(why); g_log+="DESYNC: "+w+"\n"; }
+   netSend("BYE");
+   std::wstring m=std::wstring(L"Gra obu graczy rozeszła się (")+why+L"). Gra sieciowa została przerwana.";
+   netLeave(m.c_str());
+}
+static void netHostStart(){
+   if(netBusy()) return;
+   g_net=NetState(); g_net.host=true; g_myAddrs=net::localAddresses();
+   std::string err;
+   if(g_conn.listenOn(g_hwnd,net::DEFAULT_PORT,err)){ g_net.listening=true; g_np.info.clear(); }
+   else { g_net.host=false; g_np.info=L"Nie można nasłuchiwać: "+net::fromUtf8(err); }
+   g_dirty=true;
+}
+static void netJoinStart(){
+   if(netBusy()) return;
+   std::string ip;                                      // only characters that can be in an address (no quotes, spaces...)
+   for(wchar_t ch:g_ipW) if((ch>=L'0'&&ch<=L'9')||ch==L'.'||ch==L'-'||(ch>=L'a'&&ch<=L'z')||(ch>=L'A'&&ch<=L'Z')) ip.push_back((char)ch);
+   if(ip.empty()){ g_np.info=L"Wpisz adres IP hosta."; g_dirty=true; return; }
+   g_net=NetState(); g_net.host=false;
+   if(g_conn.connectTo(g_hwnd,ip,net::DEFAULT_PORT)){ g_net.connecting=true; g_np.info.clear(); }
+   else g_np.info=L"Nie można rozpocząć łączenia.";
+   g_dirty=true;
+}
+static void netDisconnect(){
+   if(g_net.connected) netSend("BYE");
+   bool wasPlaying=g_net.playing;
+   if(wasPlaying){ netLeave(nullptr); }
+   else { netReset(); g_np.info.clear(); }
+   g_dirty=true;
+}
+static void netHostBegin(){                                 // the host picks the seed and starts both games
+   uint32_t seed=std::random_device{}();
+   netSend("START "+std::to_string(seed));
+   startNetGame(seed);
+}
+static void netRematchRequest(){
+   if(!g_net.playing) return;
+   g_net.rematchAsked=true; netSend("REMATCH");
+   setStatus(L"Czekam, aż "+g_net.peerNick+L" zgodzi się na nową partię…");
+}
+// ---------------------------------------------------------------------------
+// Online (through the server): log in with the nick + the secret key, open or join a room with a 4-letter code.
+// After "#PAIRED" the two players talk exactly as in a local network (the server just relays their lines).
+// ---------------------------------------------------------------------------
+static void netOnlineStart(bool create){
+   if(netBusy()) return;
+   std::wstring nick=g_nickW; for(auto& ch:nick) if(ch==L' ') ch=L'_';
+   if(nick.size()<3){ g_np.info=L"Nick musi mieć co najmniej 3 znaki."; g_dirty=true; return; }
+   std::string server;
+   for(wchar_t ch:g_serverW) if(ch>32&&ch<127) server.push_back((char)ch);
+   if(server.empty()){ g_np.info=L"Wpisz adres serwera."; g_dirty=true; return; }
+   std::string code; for(wchar_t ch:g_codeW) if(iswalnum(ch)&&ch<128) code.push_back((char)towupper(ch));
+   if(!create&&code.size()!=4){ g_np.info=L"Kod pokoju ma 4 znaki."; g_dirty=true; return; }
+   g_nickW=nick;
+   g_net=NetState(); g_net.online=true; g_net.pendingCreate=create; g_net.pendingCode=code;
+   g_link=&g_ws;
+   if(g_ws.connectTo(g_hwnd,server)){ g_net.connecting=true; g_np.info.clear(); }
+   else { g_net=NetState(); g_link=&g_conn; g_np.info=L"Nie można rozpocząć łączenia."; }
+   g_dirty=true;
+}
+static void netServerLine(const std::string& l){
+   std::vector<std::string> t; size_t pos=0;
+   while(pos<=l.size()){ size_t q=l.find(' ',pos); if(q==std::string::npos) q=l.size(); t.push_back(l.substr(pos,q-pos)); pos=q+1; }
+   const std::string& cmd=t[0];
+   auto num=[&](size_t i){ return i<t.size()?atoi(t[i].c_str()):0; };
+   if(cmd=="#OK"){                                     // logged in: now the room
+      if(t.size()>1) g_nickW=net::fromUtf8(t[1]);
+      saveSettings();
+      serverSend(g_net.pendingCreate?std::string("#CREATE"):"#JOIN "+g_net.pendingCode);
+   } else if(cmd=="#ERR"){
+      std::string text; for(size_t i=2;i<t.size();i++){ if(i>2) text+=' '; text+=t[i]; }
+      std::wstring m=net::fromUtf8(text); netReset(); g_np.info=m; g_np.open=true;
+   } else if(cmd=="#ROOM"){
+      g_net.roomCode=t.size()>1?t[1]:""; g_net.connecting=false; g_net.listening=true; g_np.info.clear();
+   } else if(cmd=="#PAIRED"){
+      g_net.host=(t.size()>2&&t[2]=="host"); g_net.peerNick=net::fromUtf8(t.size()>1?t[1]:"");
+      g_net.connecting=false; g_net.listening=false; g_net.connected=true;
+      g_np.info=L"Połączono z "+g_net.peerNick+L". Uzgadnianie…";
+      netSend("HELLO "+net::toUtf8(APP_VERSION)+" "+net::toUtf8(g_nickW));
+   } else if(cmd=="#H2H"){
+      g_net.h2hW=num(1); g_net.h2hL=num(2); g_net.h2hD=num(3); g_net.hasH2h=true;
+   } else if(cmd=="#STATS"){
+      setStatus(L"Wynik zapisany. Twój bilans na serwerze: "+std::to_wstring(num(1))+L" wygranych, "+std::to_wstring(num(2))+L" przegranych, "+std::to_wstring(num(3))+L" remisów.",false,8);
+   } else if(cmd=="#PEERLEFT"){
+      if(g_net.playing||g_net.connected) netLeave((g_net.peerNick+L" opuścił grę.").c_str());
+   } else if(cmd=="#KICK"){
+      netLeave(L"Ten nick zalogował się z innego miejsca.");
+   }
+}
+static void chatAdd(const std::wstring& who,const std::wstring& text,bool mine){
+   g_chatLog.push_back({who,text,mine});
+   if(g_chatLog.size()>200) g_chatLog.erase(g_chatLog.begin());
+   if(!mine && !g_chat.open){ g_chat.unread++; setStatus(who+L": "+text,false,5); }
+   g_dirty=true;
+}
+static void emoteShow(int idx,int who){ if(idx>=0&&idx<NUM_EMOTES){ g_emotes.push_back({idx,who,nowSec()}); g_dirty=true; } }
+
+// A line of the opponent's that is not a game action.
+static void netLine(const std::string& l){
+   std::string cmd=l.substr(0,l.find(' ')), rest=l.size()>cmd.size()+1?l.substr(cmd.size()+1):"";
+   if(cmd=="HELLO"){
+      size_t sp=rest.find(' ');
+      g_net.peerVer=rest.substr(0,sp); g_net.peerNick=net::fromUtf8(sp==std::string::npos?"":rest.substr(sp+1));
+      if(g_net.peerNick.empty()) g_net.peerNick=L"Przeciwnik";
+      if(g_net.peerVer!=net::toUtf8(APP_VERSION)){
+         netSend("BYE");
+         std::wstring m=L"Różne wersje gry: Ty masz "+std::wstring(APP_VERSION)+L", "+g_net.peerNick+L" ma "+net::fromUtf8(g_net.peerVer)+L".\nZaktualizujcie obie strony do tej samej wersji.";
+         netReset(); g_np.info=m; g_dirty=true;
+         MessageBoxW(g_hwnd,m.c_str(),L"Gra sieciowa",MB_OK|MB_ICONWARNING);
+         return;
+      }
+      if(g_net.host) netHostBegin();
+      else { g_np.info=L"Połączono z "+g_net.peerNick+L". Czekam na rozpoczęcie gry…"; g_dirty=true; }
+   }
+   else if(cmd=="START"){ if(!g_net.host) startNetGame((uint32_t)strtoul(rest.c_str(),nullptr,10)); }
+   else if(cmd=="CHAT"){ chatAdd(g_net.peerNick,net::fromUtf8(rest),false); }
+   else if(cmd=="EMO"){ emoteShow(atoi(rest.c_str()),1); }
+   else if(cmd=="REMATCH"){
+      if(!g_net.playing) return;
+      if(g_net.rematchAsked){ if(g_net.host) netHostBegin(); }                 // both asked: the host starts
+      else {
+         std::wstring m=g_net.peerNick+L" proponuje nową partię. Zgadzasz się?";
+         if(MessageBoxW(g_hwnd,m.c_str(),L"Nowa partia",MB_YESNO|MB_ICONQUESTION)==IDYES){
+            if(g_net.host) netHostBegin(); else netSend("REMATCH_OK");
+         } else netSend("REMATCH_NO");
+      }
+   }
+   else if(cmd=="REMATCH_OK"){ if(g_net.host&&g_net.rematchAsked) netHostBegin(); }
+   else if(cmd=="REMATCH_NO"){ g_net.rematchAsked=false; setStatus(g_net.peerNick+L" nie chce nowej partii.",true,4); }
+   else if(cmd=="BYE"){ netLeave((g_net.peerNick+L" opuścił grę.").c_str()); }
+   else if(cmd=="M"||cmd=="D"||cmd=="X"||cmd=="P"||cmd=="F"){ g_net.inbox.push_back(l); }
+}
+static void netEvent(int ev,const std::string& s){
+   switch(ev){
+   case net::EV_CONNECTED:
+      if(g_net.online){                                  // connected to the server: log in first
+         g_np.info=L"Połączono z serwerem. Logowanie…";
+         serverSend("#AUTH "+net::toUtf8(APP_VERSION)+" "+net::toUtf8(g_nickW)+" "+g_secret+(g_inviteW.empty()?std::string():" "+net::toUtf8(g_inviteW)));
+         break;
+      }
+      g_net.listening=false; g_net.connecting=false; g_net.connected=true;
+      g_np.info=L"Połączono. Uzgadnianie…"; netSend("HELLO "+net::toUtf8(APP_VERSION)+" "+net::toUtf8(g_nickW));
+      break;
+   case net::EV_FAILED:
+      { bool wasOnline=g_net.online; netReset();
+        g_np.info=(wasOnline?L"Nie udało się połączyć z serwerem: ":L"Nie udało się połączyć: ")+net::fromUtf8(s); } break;
+   case net::EV_CLOSED:
+      if(g_net.playing) netLeave(L"Połączenie z przeciwnikiem zostało przerwane.");
+      else if(g_net.connected||g_net.online){ bool wasOnline=g_net.online; netReset(); g_np.info=wasOnline?L"Połączenie z serwerem zostało zamknięte.":L"Połączenie zostało zamknięte."; }
+      break;
+   case net::EV_LINE: if(g_net.online&&!s.empty()&&s[0]=='#') netServerLine(s); else netLine(s); break;
+   }
+   g_dirty=true;
+}
+// Plays one action of the opponent (checked with the same rules - a wrong action means the games diverged).
+static void netApply(const std::string& l){
+   char c=l[0];
+   if(g_game.turn!=1){ netDesync(L"ruch przeciwnika nie w jego turze"); return; }
+   const bool endsTurn=(c=='X'||c=='P'||c=='F');
+   const uint64_t theirs=endsTurn?strtoull(l.c_str()+1,nullptr,16):0;
+   if(c=='M'){
+      int a=-1,b=-1; if(sscanf(l.c_str()+1,"%d %d",&a,&b)!=2||a<0||a>=NP||b<0||b>=NP){ netDesync(L"błędny ruch"); return; }
+      int src=Game::mirrorPile(a), dst=Game::mirrorPile(b);
+      if(!g_game.canMove(src,dst,1)){ netDesync(L"niedozwolony ruch przeciwnika"); return; }
+      g_game.doMove(src,dst,1); snd("click"); afterAnyMove();
+   } else if(c=='D'){
+      if(!g_game.canDraw(1)){ netDesync(L"niedozwolone dobranie"); return; }
+      g_game.draw(1); snd("click"); afterAnyMove();
+   } else if(c=='X'){
+      if(g_game.pile[turnedId(1)].empty()){ netDesync(L"niedozwolone odrzucenie"); return; }
+      g_game.discard(1); snd("click"); afterAnyMove(); if(!g_game.over) statusForTurn();
+   } else if(c=='P'){
+      g_game.endTurn(); snd("click"); afterAnyMove(); if(!g_game.over) statusForTurn();
+   } else if(c=='F'){
+      g_game.endTurn(); snd("nono"); afterAnyMove();
+      if(!g_game.over){ statusForTurn(); setStatus(g_net.peerNick+L" zapomniał dołożyć karty do fundamentu i traci turę.",false,4); }
+   }
+   if(endsTurn && g_net.playing && theirs!=netStateHash()) netDesync(L"różne stany gry po turze");   // checked right away
+}
+static void netTick(double now){
+   if(!g_net.playing) return;
+   if(g_game.over){ g_net.inbox.clear(); return; }
+   if(g_net.inbox.empty()||now<g_dealUntil||now<g_aiAt||uiBusy(now)) return;
+   std::string l=g_net.inbox.front(); g_net.inbox.pop_front();
+   netApply(l);
+   if(g_net.playing) g_aiAt=now+(l[0]=='M'?0.60:0.55);
 }
 
 static void endHumanTurnIfSwitched(){
@@ -536,6 +827,7 @@ static void loseTurnForForgetting(const Move& m){
    pushUndo();
    startPreview(m);                        // shows the card that should have gone to the foundation
    g_game.endTurn();
+   netLocal("F",true);
    relayout(); g_dirty=true;
    if(g_game.over){ onGameOver(); return; }
    endHumanTurnIfSwitched();
@@ -548,7 +840,7 @@ static void humanDraw(){
    Move m;
    if(g_game.mandatory(0,m)){ loseTurnForForgetting(m); return; }
    if(!g_game.canDraw(0)){ snd("nono"); setStatus(L"Talia i śmietnik są puste. Użyj „Pas”.",true,3); return; }
-   pushUndo(); logf("humanDraw"); g_game.draw(0); snd("click"); afterAnyMove(); statusForTurn();
+   pushUndo(); logf("humanDraw"); g_game.draw(0); netLocal("D",false); snd("click"); afterAnyMove(); statusForTurn();
 }
 static void humanDiscard(){
    if(!humanTurn()) return;
@@ -558,17 +850,22 @@ static void humanDiscard(){
    if(g_game.mandatory(0,m)){ loseTurnForForgetting(m); return; }
    pushUndo(); logf(hasTurned?"humanDiscard":"humanPass");
    if(hasTurned) g_game.discard(0); else g_game.endTurn();
+   netLocal(hasTurned?"X":"P",true);
    snd("click"); afterAnyMove(); endHumanTurnIfSwitched();
 }
 static void humanMove(int src,int dst,bool undoable=true){
-   if(undoable) pushUndo();
-   logf("humanMove",src,dst); g_game.doMove(src,dst,0); snd("click"); afterAnyMove();
+   if(undoable){                         // (a step of a sequence plan is not checked again: the plan start was)
+      Move must;
+      if(breaksObligation(g_game,0,dst) && g_game.mandatory(0,must)){ loseTurnForForgetting(must); return; }   // forgot a foundation move
+      pushUndo();
+   }
+   logf("humanMove",src,dst); g_game.doMove(src,dst,0); netLocal("M "+std::to_string(src)+" "+std::to_string(dst),false); snd("click"); afterAnyMove();
    if(!g_game.over) statusForTurn();
 }
 // Undo: restores the state from before the player's last action (a move, drawing, discarding, passing, or a whole
 // sequence move). When that action ended the turn, the computer's moves made since are taken back too.
 static bool canUndo(){
-   return !g_hist.empty() && !g_dragging && !g_plan.active && !g_deal.active && nowSec()>=g_dealUntil && (g_game.over||g_game.turn==0);
+   return !g_net.playing && !g_hist.empty() && !g_dragging && !g_plan.active && !g_deal.active && nowSec()>=g_dealUntil && (g_game.over||g_game.turn==0);
 }
 static void undoMove(){
    if(!canUndo()) return;
@@ -578,7 +875,7 @@ static void undoMove(){
    statusForTurn();
 }
 static void doHint(){
-   if(!humanTurn()) return;
+   if(!humanTurn()||g_net.playing) return;     // no hints in a network game
    Move m; AIContext c;
    if(aiChoose(g_game,0,c,2,g_game.rng,m)){
       startPreview(m); snd("podp");
@@ -603,10 +900,19 @@ static void autoClick(int pile){
    if(pile==turnedId(0)){ humanDiscard(); return; }
    snd("nono"); setStatus(L"Ta karta nie ma żadnego dozwolonego ruchu.",true,2.5);
 }
+// Debug aid (F6): plays ONE step for the player the way the computer would (used to test network play by script).
+static void debugAutoStep(){
+   if(!humanTurn()) return;
+   Move m; AIContext c;
+   if(aiChoose(g_game,0,c,2,g_game.rng,m)) humanMove(m.src,m.dst);
+   else if(!g_game.pile[turnedId(0)].empty()) humanDiscard();
+   else if(g_game.canDraw(0)) humanDraw();
+   else humanDiscard();
+}
 // Debug aid (F9): dump every pile to garibaldi_dump.txt next to the exe.
 static void dumpState(){
    wchar_t b[MAX_PATH]; GetModuleFileNameW(nullptr,b,MAX_PATH);
-   std::wstring path=b; path.resize(path.find_last_of(L'\\')+1); path+=L"garibaldi_dump.txt";
+   std::wstring path=b; path.resize(path.find_last_of(L'\\')+1); path+=L"garibaldi_dump"+g_instTag+L".txt";
    FILE* f=_wfopen(path.c_str(),L"w"); if(!f) return;
    const char* names[]={"res","hand","turned","waste","tab","fnd"};
    for(int id=0;id<NP;id++){
@@ -615,6 +921,7 @@ static void dumpState(){
       fprintf(f,"\n");
    }
    fprintf(f,"--- log\n%s",g_log.c_str());
+   fprintf(f,"hash=%llx playing=%d host=%d\n",(unsigned long long)(g_net.playing?netStateHash():g_game.hash()),(int)g_net.playing,(int)g_net.host);
    fprintf(f,"turn=%d over=%d totalTurns=%d idle=%d\n",g_game.turn,(int)g_game.over,g_game.totalTurns,g_game.idle);
    fclose(f);
 }
@@ -739,8 +1046,8 @@ static void drawFireworks(){
 // ============================================================================
 static void layoutButtons(){
    // widths are rough estimates for Segoe UI 14px
-   const wchar_t* labels[B_COUNT]={L"Nowa gra",L"Cofnij",L"Podpowiedź",L"Dobierz",L"Odrzuć",L"Poziom: Normalny",L"Dźwięk: wył.",L"Zasady"};
-   bool icon[B_COUNT]={true,true,true,false,false,true,false,false};
+   const wchar_t* labels[B_COUNT]={L"Nowa gra",L"Cofnij",L"Podpowiedź",L"Dobierz",L"Odrzuć",L"Poziom: Normalny",L"Sieć",L"Dźwięk: wył.",L"Zasady"};
+   bool icon[B_COUNT]={true,true,true,false,false,true,false,false,false};
    float wd[B_COUNT], sum=0;
    for(int i=0;i<B_COUNT;i++){ wd[i]=(float)wcslen(labels[i])*7.6f+24.f+(icon[i]?34.f:0.f); sum+=wd[i]; }
    float gap=8.f, avail=std::max(300.f,G.w-20.f-gap*(B_COUNT-1));
@@ -771,7 +1078,10 @@ static void drawToolbar(){
       case B_HINT:    lab=L"Podpowiedź"; icoKey="IMG_HINT"; break;
       case B_DRAW:    lab=L"Dobierz"; break;
       case B_DISCARD: lab=(g_game.pile[turnedId(0)].empty()&&!g_game.canDraw(0))?L"Pas":L"Odrzuć"; break;
-      case B_LEVEL:   lab=std::wstring(L"Poziom: ")+LEVEL_NAMES[g_level]; icoKey="IMG_USTAWIENIA"; break;
+      case B_LEVEL:   if(g_net.playing) lab=g_chat.unread>0?L"Czat ("+std::to_wstring(g_chat.unread)+L")":std::wstring(L"Czat");
+                      else lab=std::wstring(L"Poziom: ")+LEVEL_NAMES[g_level];
+                      icoKey="IMG_USTAWIENIA"; break;
+      case B_NET:     lab=g_net.playing?L"Sieć ●":L"Sieć"; break;
       case B_SOUND:   lab=g_muted?L"Dźwięk: wył.":L"Dźwięk: wł."; break;
       case B_RULES:   lab=L"Zasady"; break;
       }
@@ -796,6 +1106,7 @@ static void drawFlame(double now){
    if(F.lit){
       if(!g_game.over && g_game.turn!=F.player){                          // the turn changed: the flame moves on
          F.from=F.y; F.to=flameCenterY(g_game.turn); F.t0=now; F.moving=true; F.player=g_game.turn;
+         snd("plomien");                                                      // whoosh of the torch, as long as the move (~0.65 s)
       }
       if(F.moving){
          float pr=(float)((now-F.t0)/F.dur); if(pr>=1.f){ pr=1.f; F.moving=false; }
@@ -948,7 +1259,7 @@ static const HelpItem HELP_DOC[]={
 
  {HK_H,nullptr,L"Ścisły przymus"},
  {HK_P,nullptr,L"Każdą kartę, którą możesz zagrać na fundament (wierzch magazynu, dobrana karta, wierzch śmietnika lub kolumny), musisz tam dołożyć."},
- {HK_P,nullptr,L"Kto zapomni i spróbuje dobrać kartę, odrzucić ją lub spasować, traci turę."},
+ {HK_P,nullptr,L"Dopóki jakaś karta może iść na fundament, wolno zagrywać tylko na fundamenty. Kto zapomni i zagra inaczej (na kolumnę, na stos przeciwnika), dobierze kartę, odrzuci ją lub spasuje, traci turę. Takie zagranie nie zostaje wykonane."},
 
  {HK_H,nullptr,L"Przebieg tury"},
  {HK_B,L"1.",L"Graj kartami z magazynu, śmietnika i kolumn, ile chcesz."},
@@ -972,6 +1283,11 @@ static const HelpItem HELP_DOC[]={
  {HK_B,L"U, Ctrl+Z, Backspace",L"cofnij"},
  {HK_B,L"F2",L"nowa gra"},
  {HK_B,L"M",L"dźwięk włączony / wyłączony"},
+
+ {HK_H,nullptr,L"Gra sieciowa"},
+ {HK_P,nullptr,L"Przycisk „Sieć”: jeden gracz klika „Hostuj grę” i podaje znajomemu adres IP swojego komputera, drugi wpisuje go i klika „Połącz”. W zakładce „Internet” jeden gracz klika „Utwórz pokój” i podaje kod, drugi wpisuje kod i klika „Dołącz”. Obie kopie gry muszą mieć tę samą wersję. W grze sieciowej nie ma cofania ani podpowiedzi."},
+ {HK_B,L"Czat",L"przycisk „Czat” (zamiast poziomu) lub Enter; pod polem wiadomości są emotki."},
+ {HK_B,L"Nowa partia",L"przycisk „Nowa gra” proponuje ją przeciwnikowi, który musi się zgodzić."},
 
  {HK_H,nullptr,L"Cofanie i zapis gry"},
  {HK_P,nullptr,L"Cofnij cofa Twoją ostatnią czynność: ruch, dobranie, odrzucenie, a przeniesienie całego sekwensu jako jeden krok. Jeśli ta czynność skończyła turę, cofa też ruchy komputera wykonane od tamtej pory."},
@@ -1112,6 +1428,242 @@ static void helpKey(WPARAM k){
    helpClamp(vh); g_dirty=true;
 }
 
+// ============================================================================
+// Network panel (lobby) and chat
+// ============================================================================
+static void txtWrap(const std::wstring& s,float x,float y,float w,float h,float px,float r,float g,float b,float a,bool bold=false){
+   if(!g_dw||s.empty()) return;
+   IDWriteTextFormat* f=nullptr;
+   g_dw->CreateTextFormat(L"Segoe UI",nullptr,bold?DWRITE_FONT_WEIGHT_BOLD:DWRITE_FONT_WEIGHT_NORMAL,
+      DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,px,L"",&f);
+   if(!f) return;
+   f->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP); f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+   ID2D1SolidColorBrush* br=nullptr; g_rt->CreateSolidColorBrush(D2D1::ColorF(r,g,b,a),&br);
+   if(br){ g_rt->DrawText(s.c_str(),(UINT32)s.size(),f,D2D1::RectF(x,y,x+w,y+h),br); br->Release(); }
+   f->Release();
+}
+static void txtEmoji(const wchar_t* s,float x,float y,float w,float h,float px,float a){
+   if(!g_dw) return;
+   IDWriteTextFormat* f=nullptr;
+   g_dw->CreateTextFormat(L"Segoe UI Emoji",nullptr,DWRITE_FONT_WEIGHT_NORMAL,DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,px,L"",&f);
+   if(!f) return;
+   f->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER); f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+   ID2D1SolidColorBrush* br=nullptr; g_rt->CreateSolidColorBrush(D2D1::ColorF(1.f,1.f,1.f,a),&br);
+   if(br){ g_rt->DrawText(s,(UINT32)wcslen(s),f,D2D1::RectF(x,y,x+w,y+h),br,(D2D1_DRAW_TEXT_OPTIONS)4/*ENABLE_COLOR_FONT*/); br->Release(); }
+   f->Release();
+}
+static std::wstring clipboardText(){
+   std::wstring r;
+   if(OpenClipboard(g_hwnd)){
+      HANDLE h=GetClipboardData(CF_UNICODETEXT);
+      if(h){ const wchar_t* p=(const wchar_t*)GlobalLock(h); if(p){ r=p; GlobalUnlock(h); } }
+      CloseClipboard();
+   }
+   for(auto& ch:r) if(ch==L'\r'||ch==L'\n'||ch==L'\t') ch=L' ';
+   return r;
+}
+// --- lobby panel: two tabs - local network / internet ---
+struct NpField{ const wchar_t* label; std::wstring* text; size_t maxLen; int kind; float x,y,w,h; };   // kind: 0 text, 1 address, 2 room code
+struct NpLayout{
+   float px,py,pw,ph, cbx,cby, tabx[2],taby,tabw,tabh, bx[3],by,bw,bh, infoY;
+   std::vector<NpField> f;
+};
+static NpLayout npLayout(){
+   NpLayout L; L.pw=std::min(660.f,G.w-30.f); L.ph=std::min(570.f,G.h-24.f);
+   L.px=std::floor((G.w-L.pw)/2.f); L.py=std::max(12.f,std::floor((G.h-L.ph)/2.f));
+   L.cbx=L.px+L.pw-52; L.cby=L.py+14;
+   L.tabw=(L.pw-60-12)/2; L.tabh=38; L.taby=L.py+86; L.tabx[0]=L.px+30; L.tabx[1]=L.tabx[0]+L.tabw+12;
+   const float fx=L.px+30, fw=L.pw-60, fy=L.py+168, fh=36, gap=76;
+   auto add=[&](const wchar_t* lab,std::wstring* t,size_t mx,int kind,float x,float y,float w){ L.f.push_back({lab,t,mx,kind,x,y,w,fh}); };
+   add(L"Twój nick",&g_nickW,16,0,fx,fy,fw);
+   if(g_np.tab==0){
+      add(L"Adres IP hosta (do połączenia)",&g_ipW,45,1,fx,fy+gap,fw);
+      L.by=fy+2*gap+2;
+   } else {
+      add(L"Adres serwera",&g_serverW,100,1,fx,fy+gap,fw);
+      const float w1=(fw-12)*0.62f;
+      add(L"Hasło serwera (od znajomych)",&g_inviteW,40,0,fx,fy+2*gap,w1);
+      add(L"Kod pokoju (do dołączenia)",&g_codeW,4,2,fx+w1+12,fy+2*gap,fw-w1-12);
+      L.by=fy+3*gap+2;
+   }
+   L.bh=42; L.bw=(fw-24)/3;
+   for(int i=0;i<3;i++) L.bx[i]=fx+i*(L.bw+12);
+   L.infoY=L.by+L.bh+14;
+   return L;
+}
+static void npButton(float x,float y,float w,float h,const wchar_t* label,bool en){
+   rrect(x,y,w,h,8,1,1,1,en?0.16f:0.06f); rrect(x,y,w,h,8,1,1,1,en?0.42f:0.12f,false,1.f);
+   txt(label,x,y,w,h,15,1,1,1,en?1.f:0.4f,true);
+}
+static void npField(const NpField& f,bool focus,bool enabled){
+   txt(f.label,f.x,f.y-24,f.w,22,14,0.92f,0.95f,0.92f,enabled?1.f:0.6f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
+   rrect(f.x,f.y,f.w,f.h,8,0,0,0,0.35f);
+   if(focus&&enabled) rrect(f.x,f.y,f.w,f.h,8,1.f,0.86f,0.30f,0.95f,false,2.f); else rrect(f.x,f.y,f.w,f.h,8,1,1,1,0.30f,false,1.f);
+   bool caret=focus&&enabled&&((int)(nowSec()*2.0)%2==0);
+   txt(*f.text+(caret?L"|":L""),f.x+10,f.y,f.w-20,f.h,16,1,1,1,enabled?1.f:0.55f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+}
+static std::wstring npInfoText(){
+   if(g_net.playing) return L"Trwa gra z: "+g_net.peerNick+L".";
+   if(g_net.connected) return L"Połączono"+(g_net.peerNick.empty()?std::wstring():L" z "+g_net.peerNick)+L". Uzgadnianie…";
+   if(g_net.listening && g_net.online) return L"Pokój otwarty. Podaj znajomemu ten kod i adres serwera. Czekam, aż dołączy…";
+   if(g_net.listening){
+      std::wstring s=L"Czekam na znajomego (port "+std::to_wstring(net::DEFAULT_PORT)+L").\nPodaj mu jeden z adresów swojego komputera:\n";
+      for(auto& a:g_myAddrs) s+=L"      "+net::fromUtf8(a)+L"\n";
+      if(g_myAddrs.empty()) s+=L"      (nie udało się ustalić adresu)\n";
+      return s;
+   }
+   if(g_net.connecting) return g_net.online ? L"Łączenie z serwerem…" : L"Łączenie…";
+   if(!g_np.info.empty()) return g_np.info;
+   if(g_np.tab==1) return L"Jeden z Was klika „Utwórz pokój” i podaje znajomemu kod, drugi wpisuje kod i klika „Dołącz”. Nick jest zastrzeżony na serwerze tylko dla Ciebie.";
+   return L"Jeden z Was klika „Hostuj grę”, drugi wpisuje adres IP hosta i klika „Połącz”.\nW sieci lokalnej adres hosta to np. 192.168.0.12.";
+}
+static void drawNetPanel(){
+   if(!g_np.open||!g_rt||!g_dw) return;
+   NpLayout L=npLayout();
+   rrect(0,0,G.w,G.h,0,0,0,0,0.65f);
+   rrect(L.px+5,L.py+8,L.pw,L.ph,16,0,0,0,0.40f);
+   rrect(L.px,L.py,L.pw,L.ph,16,0.05f,0.16f,0.10f,0.99f);
+   rrect(L.px,L.py,L.pw,L.ph,16,0.95f,0.80f,0.30f,0.85f,false,2.f);
+   txt(L"Gra z drugim graczem",L.px+28,L.py+14,L.pw-120,40,28,1.f,0.86f,0.25f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
+   txt(g_np.tab==1?L"Przez internet: serwer łączy Was kodem pokoju":L"W sieci lokalnej: jeden gracz hostuje, drugi się łączy",L.px+29,L.py+52,L.pw-60,22,14,0.82f,0.90f,0.84f,0.9f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+   rrect(L.px+24,L.py+80,L.pw-48,1.5f,0,1,1,1,0.20f);
+   rrect(L.cbx,L.cby,34,34,8,1,1,1,0.14f); rrect(L.cbx,L.cby,34,34,8,1,1,1,0.35f,false,1.f);
+   g_ren.drawLine(L.cbx+11,L.cby+11,L.cbx+23,L.cby+23,2.2f,255,255,255,230); g_ren.drawLine(L.cbx+23,L.cby+11,L.cbx+11,L.cby+23,2.2f,255,255,255,230);
+   const bool busy=netBusy();
+   const wchar_t* tabNames[2]={L"Sieć lokalna",L"Internet"};
+   for(int i=0;i<2;i++){
+      bool act=(g_np.tab==i);
+      rrect(L.tabx[i],L.taby,L.tabw,L.tabh,8,1,1,1,act?0.22f:0.06f);
+      rrect(L.tabx[i],L.taby,L.tabw,L.tabh,8,act?1.f:1.f,act?0.86f:1.f,act?0.30f:1.f,act?0.9f:0.25f,false,act?2.f:1.f);
+      txt(tabNames[i],L.tabx[i],L.taby,L.tabw,L.tabh,15,1,1,1,busy&&!act?0.4f:1.f,true);
+   }
+   if(g_np.focus>=(int)L.f.size()) g_np.focus=0;
+   for(size_t i=0;i<L.f.size();i++) npField(L.f[i],(int)i==g_np.focus,!busy);
+   const wchar_t* b0=g_np.tab==1?L"Utwórz pokój":L"Hostuj grę", *b1=g_np.tab==1?L"Dołącz":L"Połącz";
+   npButton(L.bx[0],L.by,L.bw,L.bh,b0,!busy);
+   npButton(L.bx[1],L.by,L.bw,L.bh,b1,!busy);
+   npButton(L.bx[2],L.by,L.bw,L.bh,g_net.playing?L"Opuść grę":L"Rozłącz",busy);
+   float iy=L.infoY;
+   if(g_net.online && g_net.listening && !g_net.roomCode.empty()){          // the room code, big
+      txt(L"Kod pokoju",L.px+30,iy,L.pw-60,22,14,0.92f,0.95f,0.92f,1.f,true);
+      txt(net::fromUtf8(g_net.roomCode),L.px+30,iy+16,L.pw-60,70,60,1.f,0.86f,0.25f,1.f,true);
+      iy+=92;
+   }
+   txtWrap(npInfoText(),L.px+30,iy,L.pw-60,L.py+L.ph-iy-12,14.5f,0.93f,0.96f,0.93f,1.f);
+}
+static void npMouseDown(float mx,float my){
+   NpLayout L=npLayout();
+   auto in=[&](float x,float y,float w,float h){ return mx>=x&&mx<=x+w&&my>=y&&my<=y+h; };
+   if(in(L.cbx,L.cby,34,34)||!in(L.px,L.py,L.pw,L.ph)){ g_np.open=false; g_dirty=true; return; }
+   const bool busy=netBusy();
+   if(!busy){
+      for(int i=0;i<2;i++) if(in(L.tabx[i],L.taby,L.tabw,L.tabh)&&g_np.tab!=i){ g_np.tab=i; g_np.focus=0; g_np.info.clear(); g_dirty=true; return; }
+      for(size_t i=0;i<L.f.size();i++) if(in(L.f[i].x,L.f[i].y,L.f[i].w,L.f[i].h)){ g_np.focus=(int)i; g_dirty=true; return; }
+   }
+   if(in(L.bx[0],L.by,L.bw,L.bh)&&!busy){ if(g_nickW.empty()) g_nickW=L"Gracz"; saveSettings(); if(g_np.tab==1) netOnlineStart(true); else netHostStart(); }
+   else if(in(L.bx[1],L.by,L.bw,L.bh)&&!busy){ if(g_nickW.empty()) g_nickW=L"Gracz"; saveSettings(); if(g_np.tab==1) netOnlineStart(false); else netJoinStart(); }
+   else if(in(L.bx[2],L.by,L.bw,L.bh)&&busy){ netDisconnect(); }
+   g_dirty=true;
+}
+static void npChar(wchar_t c){
+   if(c==27){ g_np.open=false; g_dirty=true; return; }
+   if(netBusy()) return;
+   NpLayout L=npLayout();
+   if(g_np.focus>=(int)L.f.size()) g_np.focus=0;
+   const NpField& fld=L.f[g_np.focus]; std::wstring& f=*fld.text;
+   if(c==9){ g_np.focus=(g_np.focus+1)%(int)L.f.size(); }
+   else if(c==13){
+      if(g_np.focus+1<(int)L.f.size()) g_np.focus++;
+      else { if(g_nickW.empty()) g_nickW=L"Gracz"; saveSettings(); if(g_np.tab==1) netOnlineStart(g_codeW.empty()); else netJoinStart(); }   // the last field: act
+   }
+   else if(c==8){ if(!f.empty()) f.pop_back(); }
+   else if(c==22){ std::wstring t=clipboardText(); for(wchar_t ch:t) if(f.size()<fld.maxLen) f.push_back(ch); }
+   else if(c>=32&&c!=127&&f.size()<fld.maxLen){
+      if(fld.kind==1 && !((c>=L'0'&&c<=L'9')||c==L'.'||c==L':'||c==L'/'||c==L'-'||(c>=L'a'&&c<=L'z')||(c>=L'A'&&c<=L'Z'))) return;   // an address
+      if(fld.kind==2){ if(!((c>=L'0'&&c<=L'9')||(c>=L'a'&&c<=L'z')||(c>=L'A'&&c<=L'Z'))) return; c=(wchar_t)towupper(c); }                 // a room code
+      f.push_back(c);
+   }
+   g_dirty=true;
+}
+// --- chat ---
+struct ChatRects{ float x,y,w,h, ex,ey,ew,eh, ix,iy,iw,ih, mx,my,mw,mh; };
+static ChatRects chatRects(){
+   ChatRects r; r.w=std::min(360.f,G.w-24.f); r.h=290; r.x=G.w-r.w-14; r.y=G.h-SB-r.h-10;
+   r.mx=r.x+12; r.my=r.y+34; r.mw=r.w-24; r.mh=r.h-34-96;
+   r.ex=r.x+12; r.ey=r.y+r.h-90; r.ew=(r.w-24)/NUM_EMOTES; r.eh=38;
+   r.ix=r.x+12; r.iy=r.y+r.h-44; r.iw=r.w-24; r.ih=32;
+   return r;
+}
+static void drawChat(){
+   if(!g_chat.open||!g_net.playing||!g_rt) return;
+   ChatRects r=chatRects();
+   rrect(r.x,r.y,r.w,r.h,12,0.04f,0.13f,0.09f,0.95f); rrect(r.x,r.y,r.w,r.h,12,0.95f,0.80f,0.30f,0.7f,false,1.5f);
+   txt(L"Czat z "+g_net.peerNick,r.x+14,r.y+4,r.w-60,28,15,1.f,0.86f,0.25f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
+   g_ren.drawLine(r.x+r.w-26,r.y+10,r.x+r.w-14,r.y+22,2.f,255,255,255,220); g_ren.drawLine(r.x+r.w-14,r.y+10,r.x+r.w-26,r.y+22,2.f,255,255,255,220);
+   // the newest lines at the bottom of the log area
+   g_rt->PushAxisAlignedClip(D2D1::RectF(r.mx,r.my,r.mx+r.mw,r.my+r.mh),D2D1_ANTIALIAS_MODE_ALIASED);
+   float lineH=20.f; int maxLines=(int)(r.mh/lineH);
+   int start=std::max(0,(int)g_chatLog.size()-maxLines);
+   float y=r.my+r.mh-(float)((int)g_chatLog.size()-start)*lineH;
+   for(int i=start;i<(int)g_chatLog.size();i++,y+=lineH){
+      const ChatLine& c=g_chatLog[i];
+      txt(c.who+L": "+c.text,r.mx,y,r.mw,lineH,13.5f,c.mine?0.75f:1.f,c.mine?0.90f:0.92f,c.mine?1.f:0.6f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+   }
+   g_rt->PopAxisAlignedClip();
+   for(int i=0;i<NUM_EMOTES;i++){
+      float x=r.ex+i*r.ew;
+      rrect(x+2,r.ey,r.ew-4,r.eh,8,1,1,1,0.10f);
+      txtEmoji(EMOJIS[i],x+2,r.ey,r.ew-4,r.eh,r.ew>=40?24.f:20.f,1.f);
+   }
+   rrect(r.ix,r.iy,r.iw,r.ih,8,0,0,0,0.35f); rrect(r.ix,r.iy,r.iw,r.ih,8,1.f,0.86f,0.30f,0.8f,false,1.5f);
+   bool caret=((int)(nowSec()*2.0)%2==0);
+   std::wstring shown=g_chat.input; if(shown.size()>34) shown=shown.substr(shown.size()-34);
+   txt(g_chat.input.empty()?std::wstring(L"Napisz wiadomość i naciśnij Enter")+(caret?L"":L""):shown+(caret?L"|":L""),r.ix+8,r.iy,r.iw-16,r.ih,14,
+       g_chat.input.empty()?0.65f:1.f,g_chat.input.empty()?0.72f:1.f,g_chat.input.empty()?0.66f:1.f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+}
+static bool chatMouseDown(float mx,float my){
+   if(!g_chat.open||!g_net.playing) return false;
+   ChatRects r=chatRects();
+   if(mx<r.x||mx>r.x+r.w||my<r.y||my>r.y+r.h) return false;           // outside: the game gets the click
+   if(mx>=r.x+r.w-34&&my<=r.y+30){ g_chat.open=false; g_dirty=true; return true; }
+   if(my>=r.ey&&my<=r.ey+r.eh&&mx>=r.ex&&mx<r.ex+r.ew*NUM_EMOTES){
+      int i=(int)((mx-r.ex)/r.ew); if(i>=0&&i<NUM_EMOTES){ netSend("EMO "+std::to_string(i)); emoteShow(i,0); }
+   }
+   return true;
+}
+static void chatChar(wchar_t c){
+   if(c==27){ g_chat.open=false; g_dirty=true; return; }
+   if(c==13){
+      if(g_chat.input.empty()) return;
+      netSend("CHAT "+net::toUtf8(g_chat.input)); chatAdd(g_nickW,g_chat.input,true); g_chat.input.clear(); return;
+   }
+   if(c==8){ if(!g_chat.input.empty()) g_chat.input.pop_back(); }
+   else if(c==22){ std::wstring t=clipboardText(); for(wchar_t ch:t) if(g_chat.input.size()<200) g_chat.input.push_back(ch); }
+   else if(c>=32&&c!=127&&g_chat.input.size()<200) g_chat.input.push_back(c);
+   g_dirty=true;
+}
+// floating emotes above the magazines and the nicknames in a network game
+static void drawNetExtras(double now){
+   if(!g_net.playing) return;
+   for(int p=0;p<2;p++){
+      std::wstring n= p==0 ? g_nickW : g_net.peerNick;
+      txt(n,slotX(1)+G.cw*0.30f,rowY(p)+G.ch*0.5f-14,G.cw*1.9f,28,15,1,1,1,0.92f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
+   }
+   if(g_net.online && g_net.hasH2h){                                       // my record against this opponent
+      std::wstring r=L"Bilans z "+g_net.peerNick+L": "+std::to_wstring(g_net.h2hW)+L":"+std::to_wstring(g_net.h2hL);
+      if(g_net.h2hD>0) r+=L"  (remisy: "+std::to_wstring(g_net.h2hD)+L")";
+      txt(r,slotX(1)+G.cw*0.30f,rowY(0)+G.ch*0.5f+10,G.cw*3.2f,24,13,0.85f,0.92f,0.85f,0.9f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+   }
+   for(size_t i=0;i<g_emotes.size();){
+      double age=now-g_emotes[i].t0;
+      if(age>3.2){ g_emotes.erase(g_emotes.begin()+i); continue; }
+      float a=age<2.4?1.f:(float)(1.0-(age-2.4)/0.8), rise=(float)(age*10.0);
+      float cx=slotX(1)+G.cw*0.55f, cy=rowY(g_emotes[i].who)+G.ch*0.18f-rise;
+      txtEmoji(EMOJIS[g_emotes[i].idx],cx-G.cw*0.5f,cy-G.ch*0.25f,G.cw*1.4f,G.ch*0.6f,std::min(54.f,G.cw*0.62f),a);
+      ++i;
+   }
+}
+
 static void render(){
    if(!ensureRT()) return;
    double now=nowSec();
@@ -1143,6 +1695,7 @@ static void render(){
       else g_ren.drawEmpty(x,y,slotLabel(id));
    }
    drawFlame(now);
+   drawNetExtras(now);
 
    // cards, back to front
    struct Item{ int z; int id; };
@@ -1248,6 +1801,8 @@ static void render(){
    if(g_statusUntil>0 && now>g_statusUntil){ g_statusUntil=0; statusForTurn(); }
    if(g_statusErr) txt(g_status,12,G.h-SB,G.w-24,SB,14,1.f,0.5f,0.5f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
    else            txt(g_status,12,G.h-SB,G.w-24,SB,14,1,1,1,0.85f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+   drawChat();
+   drawNetPanel();
    helpDraw();                                        // the rules window is on top of everything
    HRESULT hr=g_rt->EndDraw();
    if(hr==D2DERR_RECREATE_TARGET) discardRT();
@@ -1275,12 +1830,16 @@ static int hitButton(float x,float y){
 }
 static void doButton(int id){
    switch(id){
-   case B_NEW:     newGameStart(); break;
+   case B_NEW:     if(g_net.playing) netRematchRequest(); else newGameStart(); break;
    case B_UNDO:    undoMove(); break;
    case B_HINT:    doHint(); break;
    case B_DRAW:    humanDraw(); break;
    case B_DISCARD: humanDiscard(); break;
-   case B_LEVEL:   g_level=(g_level+1)%3; saveSettings(); setStatus(std::wstring(L"Poziom komputera: ")+LEVEL_NAMES[g_level],false,3); break;
+   case B_LEVEL:
+      if(g_net.playing){ g_chat.open=!g_chat.open; if(g_chat.open) g_chat.unread=0; }
+      else { g_level=(g_level+1)%3; saveSettings(); setStatus(std::wstring(L"Poziom komputera: ")+LEVEL_NAMES[g_level],false,3); }
+      break;
+   case B_NET:     g_np.open=!g_np.open; if(g_np.open){ g_np.focus=0; if(g_myAddrs.empty()) g_myAddrs=net::localAddresses(); } break;
    case B_SOUND:   g_muted=!g_muted; saveSettings(); if(g_muted) SoundSystem::instance().fadeOutAll(100); else snd("click"); break;
    case B_RULES:   showRules(); break;
    }
@@ -1313,6 +1872,7 @@ static bool seqTarget(int src,int idx,int dst,std::vector<Move>& plan){
    return planSequenceMove(g_game,src,idx,dst,plan);
 }
 static void startSeqPlan(const std::vector<Move>& plan){
+   { Move must; if(g_game.mandatory(0,must)){ loseTurnForForgetting(must); return; } }   // a column move while a foundation move is pending
    pushUndo();                                                  // the whole sequence is a single undo step
    g_plan.active=true; g_plan.moves=plan; g_plan.next=0; g_plan.at=nowSec()+0.22;   // let the dragged cards return first
    g_prev.active=false;
@@ -1353,6 +1913,8 @@ static int hitTabCard(int col,float x,float y){
 
 static void onLDown(int mx,int my){
    if(g_help.open){ helpMouseDown((float)mx,(float)my); return; }
+   if(g_np.open){ npMouseDown((float)mx,(float)my); return; }
+   if(chatMouseDown((float)mx,(float)my)) return;
    int b=hitButton((float)mx,(float)my);
    if(b>=0){ if(btnEnabled(b)) doButton(b); return; }
    if(!humanTurn()) return;
@@ -1451,6 +2013,7 @@ static void onLUp(int mx,int my){
 // Computer's turn
 // ============================================================================
 static void aiTick(double now){
+   if(g_net.playing) return;                    // the opponent is a person: his actions come over the network
    if(g_game.over||g_game.turn!=1||now<g_dealUntil||now<g_aiAt) return;
    if(uiBusy(now)) return;
    Step s=aiStep(g_game,1,g_ctx,g_level);
@@ -1487,8 +2050,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
    case WM_MOUSEWHEEL:
       if(g_help.open){ g_help.scroll-=(float)GET_WHEEL_DELTA_WPARAM(wp)/120.f*70.f; float px,py,pw,ph,vx,vy,vw,vh; helpGeom(px,py,pw,ph,vx,vy,vw,vh); helpClamp(vh); g_dirty=true; }
       return 0;
+   case WM_CHAR:
+      if(g_help.open) return 0;
+      if(g_np.open){ npChar((wchar_t)wp); return 0; }
+      if(g_chat.open && g_net.playing){ chatChar((wchar_t)wp); return 0; }
+      return 0;
+   case net::WM_NET:{
+      std::unique_ptr<std::string> text((std::string*)lp);
+      netEvent((int)wp,*text);
+      return 0;}
    case WM_KEYDOWN:
       if(g_help.open){ helpKey(wp); return 0; }
+      if(g_np.open||(g_chat.open&&g_net.playing)) return 0;            // typing: the letters go to WM_CHAR
+      if(wp==VK_RETURN && g_net.playing){ g_chat.open=true; g_chat.unread=0; return 0; }
       switch(wp){
       case VK_F2:     doButton(B_NEW); break;
       case VK_BACK:   undoMove(); break;
@@ -1496,6 +2070,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
       case 'Z':       if(GetKeyState(VK_CONTROL)&0x8000) undoMove(); break;
       case VK_F1:     showRules(); break;
       case VK_F9:     dumpState(); break;
+      case VK_F6:     debugAutoStep(); break;
       case VK_F11:    g_forceTie=true; newGameStart(); g_forceTie=false; break;   // debug: a game that starts with identical magazine cards
       case VK_F10:    if(!g_game.over){ g_game.over=true; g_game.winner=0; afterAnyMove(); } break;   // debug: force a win
       case VK_SPACE:  humanDraw(); break;
@@ -1534,13 +2109,25 @@ static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
       return 0;}
    case WM_ENDSESSION: if(wp) { saveGame(); saveSettings(); } return 0;
    case WM_DESTROY:
+      if(g_net.connected) netSend("BYE");
+      g_conn.close(); g_ws.close();
       saveGame(); saveSettings(); PostQuitMessage(0); return 0;
    }
    return DefWindowProcW(hwnd,msg,wp,lp);
 }
 
 int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
-   HANDLE mutex=CreateMutexW(nullptr,TRUE,L"Garibaldka_SingleInstance");
+   // Command line (also handy as shortcuts): /host = host a network game at once, /join=ADDRESS = join one,
+   // /i2 = a second copy on the same computer (own settings/save files; for testing the network play).
+   std::wstring cmdLine=GetCommandLineW();
+   bool autoHost=cmdLine.find(L"/host")!=std::wstring::npos;
+   std::wstring autoJoin;
+   { size_t jp=cmdLine.find(L"/join="); if(jp!=std::wstring::npos){ size_t e=cmdLine.find(L' ',jp); autoJoin=cmdLine.substr(jp+6,e==std::wstring::npos?std::wstring::npos:e-jp-6); } }
+   if(cmdLine.find(L"/i2")!=std::wstring::npos) g_instTag=L".i2";
+   auto argValue=[&](const wchar_t* key){ std::wstring v; size_t k=cmdLine.find(key); if(k!=std::wstring::npos){ size_t e=cmdLine.find(L' ',k); v=cmdLine.substr(k+wcslen(key),e==std::wstring::npos?std::wstring::npos:e-k-wcslen(key)); } return v; };
+   std::wstring argServer=argValue(L"/server="), argInvite=argValue(L"/invite="), argCode=argValue(L"/joincode=");
+   bool autoCreate=cmdLine.find(L"/create")!=std::wstring::npos;
+   HANDLE mutex=CreateMutexW(nullptr,TRUE,g_instTag.empty()?L"Garibaldka_SingleInstance":L"Garibaldka_SingleInstance_i2");
    if(GetLastError()==ERROR_ALREADY_EXISTS){
       HWND ex=FindWindowW(L"GaribaldkaWnd",nullptr);
       if(ex){ if(IsIconic(ex)) ShowWindow(ex,SW_RESTORE); SetForegroundWindow(ex); }
@@ -1583,6 +2170,11 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
    {  RECT rc; GetClientRect(hwnd,&rc); computeGeo((float)rc.right,(float)rc.bottom); layoutButtons(); }
    if(!loadSavedGame()) newGameStart();
    if(g_checkUpdates) startUpdateCheck();
+   { std::wstring n=argValue(L"/nick="); if(!n.empty()) g_nickW=n; }
+   if(!argServer.empty()) g_serverW=argServer;
+   if(!argInvite.empty()) g_inviteW=argInvite;
+   if(autoHost) { g_np.tab=0; netHostStart(); } else if(!autoJoin.empty()){ g_np.tab=0; g_ipW=autoJoin; netJoinStart(); }
+   else if(autoCreate){ g_np.tab=1; netOnlineStart(true); } else if(!argCode.empty()){ g_np.tab=1; g_codeW=argCode; netOnlineStart(false); }
 
    MSG msg={};
    for(;;){
@@ -1594,10 +2186,13 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
       planTick(now);
       dealTick(now);
       revealTick(now);
+      netTick(now);
+      { static double lastPing=0;                      // the server connection is kept alive (answered by the server with #PONG)
+        if(g_net.online&&g_ws.connected()&&now-lastPing>20.0){ g_ws.sendLine("#PING"); lastPing=now; } }
       aiTick(now);
       if(g_fw.active() && now-g_fwLast>=0.028){ g_fw.tick((int)G.w,(int)G.h); g_fwLast=now; g_dirty=true; }
       bool flameBurning=g_flame.lit||g_flame.scale>0.01f||g_flame.igniteAt>0;
-      bool anim=anyAnimating(now)||g_plan.active||g_dragging||g_prev.active||g_start.active||g_rev.active||g_deal.active||g_fw.active()||(g_game.over&&g_overShown&&now-g_overAt<1.0);
+      bool anim=anyAnimating(now)||g_plan.active||g_dragging||g_prev.active||g_start.active||g_rev.active||g_deal.active||g_fw.active()||!g_emotes.empty()||(g_game.over&&g_overShown&&now-g_overAt<1.0);
       if(anim||g_dirty){ render(); if(!anim) continue; Sleep(1); }
       else if(flameBurning){ render(); MsgWaitForMultipleObjects(0,nullptr,FALSE,12,QS_ALLINPUT); }   // only the flame moves: ~60 fps without a busy loop
       else MsgWaitForMultipleObjects(0,nullptr,FALSE,25,QS_ALLINPUT);

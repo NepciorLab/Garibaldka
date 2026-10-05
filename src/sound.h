@@ -20,8 +20,9 @@ static const char* SOUND_KEYS[] = {
    "nono",    // 4 Ruch niemozliwy / naruszenie obowiazku
    "podp",    // 5 Podpowiedz
    "cofnij",  // 6 Cofniecie ruchu
+   "plomien", // 7 Przesuniecie plomienia (zmiana tury)
 };
-static const int SOUND_COUNT = 7;
+static const int SOUND_COUNT = 8;
 static const wchar_t* SOUND_LABELS[] = {
    L"Nowa gra",
    L"Ruch karty",
@@ -30,6 +31,7 @@ static const wchar_t* SOUND_LABELS[] = {
    L"Ruch niemożliwy",
    L"Podpowiedź",
    L"Cofnięcie ruchu",
+   L"Przesunięcie płomienia",
 };
 static const wchar_t* SOUND_DEFAULTS[] = {
    L"nowa.wav",
@@ -39,6 +41,7 @@ static const wchar_t* SOUND_DEFAULTS[] = {
    L"nono.wav",
    L"podpowiedz.wav",
    L"cofnij.wav",
+   L"plomien.wav",
 };
 
 // WAV file header parsing

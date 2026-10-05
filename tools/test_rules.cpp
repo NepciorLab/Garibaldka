@@ -2,6 +2,11 @@
 //   python -m ziglang c++ -std=c++17 -O2 tools/test_rules.cpp -o build/test_rules.exe && build/test_rules.exe
 #include "../src/game.h"
 #include <cstdio>
+// Fingerprints of the deals of seeds 1, 2 and 2026 (recorded once; the shuffle was also cross-checked with an
+// independent implementation of MT19937 + the same Fisher-Yates in Python).
+#define GOLDEN_SEED_1 5427993316304309282ULL
+#define GOLDEN_SEED_2 3493877772122777702ULL
+#define GOLDEN_SEED_2026 2286541856716091818ULL
 static int fails=0;
 #define CHECK(c,msg) do{ if(!(c)){ printf("FAIL: %s\n",msg); fails++; } else printf("ok:   %s\n",msg); }while(0)
 
@@ -201,6 +206,51 @@ int main(){
       // nothing fits anywhere: no move
       Game n=h; n.pile[turnedId(0)]={mk(Spades,9,0)};
       CHECK(!bestClickMove(n,turnedId(0),m),"no legal move at all: no move (the turned card is then discarded by the caller)");
+   }
+   // --- 12. Strict obligation at the moment of a move: only foundation moves are allowed while one is pending.
+   {
+      Game g=empty();
+      g.pile[resId(0)]={mk(Spades,3,0,false),mk(Hearts,7,0)};
+      g.pile[resId(1)]={mk(Hearts,5,1,false),mk(Hearts,6,1)};
+      g.pile[turnedId(0)]={mk(Spades,1,0)};                                  // a drawn ace of spades: must go to a foundation
+      for(int j=0;j<8;j++) g.pile[tabId(j)]={mk(Clubs,2+j%5,1)};
+      CHECK(breaksObligation(g,0,tabId(3)),"the drawn ace laid on the table breaks the obligation");
+      CHECK(breaksObligation(g,0,wasteId(1)),"...and so does laying it on the opponent's pile");
+      CHECK(!breaksObligation(g,0,fndId(0)),"a foundation move is always fine");
+      Game h=g; h.pile[turnedId(0)]={mk(Spades,5,0)};                         // a 5 of spades: no foundation move pending
+      CHECK(!breaksObligation(h,0,tabId(3)),"with no foundation move pending every move is fine");
+   }
+   // --- 13. Deals are reproducible EVERYWHERE: the same seed gives the same cards (own shuffle, no std::shuffle).
+   {
+      auto fingerprint=[](uint32_t seed){ Game g; g.newGame(seed,false); return g.hash(); };
+      CHECK(fingerprint(12345u)==fingerprint(12345u),"the same seed gives the same game");
+      CHECK(fingerprint(12345u)!=fingerprint(12346u),"another seed gives another game");
+      // GOLDEN VALUES: these fingerprints were recorded once. If the shuffle ever changes (a different compiler or
+      // library, or an edit of portableShuffle) the deals of the same seed would differ between computers/versions.
+      CHECK(fingerprint(1u)==GOLDEN_SEED_1 && fingerprint(2u)==GOLDEN_SEED_2 && fingerprint(2026u)==GOLDEN_SEED_2026,
+            "golden deals for seeds 1, 2 and 2026 are unchanged");
+      printf("      (fingerprints: %llu %llu %llu)\n",(unsigned long long)fingerprint(1u),(unsigned long long)fingerprint(2u),(unsigned long long)fingerprint(2026u));
+   }
+   // --- 14. Mirroring (the other player's chair) is its own inverse and keeps the rules intact.
+   {
+      Game g; g.newGame(777u,false); g.draw(0);
+      Game m=g.mirrored();
+      CHECK(m.mirrored().hash()==g.hash(),"mirrored() twice gives the original game");
+      CHECK(m.turn==1-g.turn&&m.pile[turnedId(1)].size()==g.pile[turnedId(0)].size(),"players are swapped in the mirror");
+      bool sameCards=true; for(int id=0;id<NP;id++) if(g.pile[id].size()!=m.pile[Game::mirrorPile(id)].size()) sameCards=false;
+      CHECK(sameCards,"every pile has its counterpart in the mirror");
+      // a move on one side, the mirrored move on the other, gives states that are again mirrors of each other
+      Game a=g, b=m; bool ok=true; int moves=0;
+      for(int step=0;step<400&&!a.over;step++){
+         int p=a.turn; AIContext ctx; Step st=aiStep(a,p,ctx,2);             // a plays (any side)
+         if(st.kind==ST_MOVE){ if(!b.canMove(Game::mirrorPile(st.m.src),Game::mirrorPile(st.m.dst),1-p)){ ok=false; break; } b.doMove(Game::mirrorPile(st.m.src),Game::mirrorPile(st.m.dst),1-p); }
+         else if(st.kind==ST_DRAW) b.draw(1-p);
+         else if(st.kind==ST_DISCARD) b.discard(1-p);
+         else b.endTurn();
+         moves++;
+         if(b.mirrored().hash()!=a.hash()){ ok=false; break; }
+      }
+      CHECK(ok&&moves>50,"400 computer actions applied to one side and (mirrored) to the other keep both states identical");
    }
    printf(fails?"\n%d FAILED\n":"\nall passed\n",fails);
    return fails?1:0;

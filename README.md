@@ -8,7 +8,7 @@ karty, dźwięki i animacje (rozdawanie, obrót, przesuwanie kart, fajerwerki) c
 
 `Garibaldi.exe` – jeden plik, karty, ikony i dźwięki są wbudowane. Obok pliku powstaje `Garibaldi.ini`
 (poziom, dźwięk, położenie okna) i folder `Sounds` – wrzucone tam pliki WAV o nazwach
-`nowa`, `click`, `sukces`, `koniec`, `nono`, `podpowiedz` zastępują wbudowane dźwięki.
+`nowa`, `click`, `sukces`, `koniec`, `nono`, `podpowiedz`, `cofnij`, `plomien` zastępują wbudowane dźwięki.
 
 ## Animacje
 
@@ -33,6 +33,15 @@ Każdy ruch karty przyspiesza w pierwszej połowie i zwalnia w drugiej. Odkrycie
 * Poziom komputera zmieniasz przyciskiem „Poziom”. Zasady SI: [AI_RULES.md](AI_RULES.md).
 * Diagnostyka: `F9` zapisuje stan stołu i dziennik ruchów do `garibaldi_dump.txt`, `F10` wymusza wygraną (test ekranu końca gry), `F11` zaczyna grę z identycznymi kartami w magazynach (test rozstrzygania z talii).
 
+## Gra sieciowa
+
+Przycisk „Sieć” ma dwie zakładki. Każdy wybiera sobie nick. W grze sieciowej jest czat z emotkami i prośba o nową partię; nie ma cofania ani podpowiedzi.
+
+- **Sieć lokalna**: jeden gracz klika „Hostuj grę” (gra pokazuje adres IP jego komputera, port 47321), drugi wpisuje ten adres i klika „Połącz”. Przy pierwszym hostowaniu Zapora Windows zapyta o zgodę.
+- **Internet**: gra łączy się z serwerem (Cloudflare Workers, katalog `server/`). Jeden gracz klika „Utwórz pokój” i podaje znajomemu 4-znakowy kod, drugi wpisuje kod i klika „Dołącz”. Nick jest zastrzeżony na serwerze (klucz zapisany w pliku .ini), serwer prowadzi bilans spotkań dwóch graczy (wynik liczy się, gdy obaj zgłoszą ten sam). Dostęp tylko dla znajomych chroni hasło serwera.
+
+Serwer: `cd server && npm install && npx wrangler deploy`, hasło: `npx wrangler secret put INVITE_CODE`. Test protokołu: `WS_URL=wss://.../ws INVITE=hasło node test/protocol.mjs`.
+
 ## Aktualizacje
 
 Gra przy starcie (w tle) sprawdza w GitHub Releases tego repozytorium, czy jest nowsza wersja, tak samo jak Pasjans Dziadkowy. Jeśli jest, pyta o zgodę, pobiera `Garibaldi.exe`, podmienia plik i uruchamia się ponownie (zapisana gra zostaje). Sprawdzanie przy starcie można wyłączyć w oknie zasad. Numer wersji i data budowy są na początku okna zasad.
@@ -48,6 +57,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 Wynik: `build/Garibaldi.exe`. Test silnika bez grafiki (komputer kontra komputer):
 `python -m ziglang c++ -std=c++17 -O2 tools/sim.cpp -o build/sim.exe` i `build/sim.exe 600 2 2`. Testy reguł: `tools/test_rules.cpp`.
+
+`res/sounds/plomien.wav` (przesunięcie płomienia) powstał z `Pochodnia.mp3` narzędziem `tools/mp3_to_wav.cpp` (dekoder Windows Media Foundation).
 
 ## Układ kodu
 

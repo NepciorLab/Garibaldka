@@ -47,6 +47,19 @@ inline int pidx(int id)   { switch(ptype(id)){ case PT_TAB:return id-8; case PT_
 
 struct Move { int src=-1, dst=-1; };
 
+// Portable, fully specified shuffle: the same seed gives the same permutation on EVERY compiler, standard
+// library and machine. std::mt19937 is bit-for-bit standardized (same seed -> same raw 32-bit values), but
+// std::shuffle and std::uniform_int_distribution are NOT (their algorithms are implementation-defined) - that
+// is what gave different deals for the same seed on different computers. Here only mt19937::operator()() is
+// used; the reduction to a bounded index (rejection sampling, unbiased) and the Fisher-Yates loop are our own.
+inline uint32_t boundedRand(std::mt19937& g,uint32_t bound){
+   uint32_t threshold=(0u-bound)%bound;                 // values below it would make r%bound biased: rejected
+   for(;;){ uint32_t r=g(); if(r>=threshold) return r%bound; }
+}
+template<class T> inline void portableShuffle(std::vector<T>& v,std::mt19937& g){
+   for(size_t i=v.size();i>1;){ --i; uint32_t j=boundedRand(g,(uint32_t)(i+1)); std::swap(v[i],v[j]); }
+}
+
 enum StepKind { ST_MOVE, ST_DRAW, ST_DISCARD, ST_PASS };
 struct Step { StepKind kind=ST_PASS; Move m; };
 
@@ -59,12 +72,15 @@ public:
    int  idle=0;            // consecutive turns without a single move
    int  turnMoves=0;
    int  totalTurns=0;
-   std::mt19937 rng{std::random_device{}()};
+   uint32_t seed=0;        // the seed of the deal: the same seed gives the same game everywhere
+   std::mt19937 rng{std::random_device{}()};   // only for the computer player's noise, never for the deal
 
    // Deals a new game. Each player: 13 cards magazine (12 down + 1 up),
    // 4 cards to the shared columns, the remaining 35 in the hand. Then decideStart() picks who starts.
    // forceTie (debug key F11): makes the magazine cards - and the top hand cards - of both players identical.
-   void newGame(bool forceTie=false){
+   void newGame(bool forceTie=false){ newGame(std::random_device{}(),forceTie); }
+   void newGame(uint32_t dealSeed,bool forceTie){
+      seed=dealSeed; std::mt19937 g(dealSeed);
       for(auto& p:pile) p.clear();
       over=false; winner=-1; idle=0; turnMoves=0; totalTurns=0;
       for(int pl=0;pl<2;pl++){
@@ -72,7 +88,7 @@ public:
          for(int s=0;s<4;s++) for(int r=1;r<=13;r++){
             Card c; c.suit=s; c.rank=r; c.deck=pl; c.id=pl*52+s*13+r-1; c.up=false; dk.push_back(c);
          }
-         std::shuffle(dk.begin(),dk.end(),rng);
+         portableShuffle(dk,g);
          for(int i=0;i<13;i++) pile[resId(pl)].push_back(dk[i]);
          pile[resId(pl)].back().up=true;
          for(int k=0;k<4;k++){ Card c=dk[13+k]; c.up=true; pile[tabId(pl*4+k)].push_back(c); }
@@ -114,7 +130,7 @@ public:
       const Card& ma=pile[resId(0)].back(); const Card& mb=pile[resId(1)].back();
       if(decide(ma,mb)){ turn=w; startHow=bySuit?SH_MAG_SUIT:SH_MAG_RANK; startCardId=(w==0?ma.id:mb.id); return; }
       std::vector<Card> shown[2];
-      turn=(int)(rng()%2);                             // only if the hands run out (cannot realistically happen)
+      turn=(int)(seed&1u);                             // only if the hands run out (cannot realistically happen)
       while(!pile[handId(0)].empty()&&!pile[handId(1)].empty()){
          Card ca=pile[handId(0)].back(); pile[handId(0)].pop_back(); ca.up=true;
          Card cb=pile[handId(1)].back(); pile[handId(1)].pop_back(); cb.up=true;
@@ -207,6 +223,30 @@ public:
          for(int f=0;f<NUM_FND;f++) if(canMove(src,fndId(f),p)){ out.src=src; out.dst=fndId(f); return true; }
       }
       return false;
+   }
+
+   // ---- network play: the same game seen from the other player's chair ----
+   // Each computer shows ITSELF as player 0 (bottom row, blue deck). Player 1 of one computer is player 0 of the other,
+   // so the whole game state has to be mirrored: players swapped (magazine/hand/turned/waste piles, decks, turn,
+   // the 4+4 columns), foundations stay (their suits are fixed). mirrored() is its own inverse.
+   static int mirrorPile(int id){ if(id<8) return id^1; if(id<16) return 8+((id-8)+4)%8; return id; }
+   static int mirrorCardId(int id){ return (1-id/52)*52+id%52; }
+   Game mirrored() const {
+      Game m;
+      m.seed=seed; m.turn=1-turn; m.over=over; m.winner=winner<0?-1:1-winner;
+      m.idle=idle; m.turnMoves=turnMoves; m.totalTurns=totalTurns;
+      m.startHow=startHow; m.startCardId=startCardId<0?-1:mirrorCardId(startCardId);
+      for(auto& pr:startReveals) m.startReveals.push_back({mirrorCardId(pr.second),mirrorCardId(pr.first)});
+      for(int id=0;id<NP;id++) for(const Card& c:pile[id]){
+         Card d=c; d.deck=1-c.deck; d.id=mirrorCardId(c.id); m.pile[mirrorPile(id)].push_back(d);
+      }
+      return m;
+   }
+   // 64-bit fingerprint of the whole game state (FNV-1a over serialize()), to detect that two computers diverged.
+   uint64_t hash() const {
+      std::string t=serialize(); uint64_t h=1469598103934665603ULL;
+      for(unsigned char ch:t){ h^=ch; h*=1099511628211ULL; }
+      return h;
    }
 
    // ---- saving / loading (single line of text, all values separated by spaces) ----
@@ -437,6 +477,14 @@ inline bool aiChoose(const Game& g,int p,const AIContext& ctx,int level,std::mt1
    // weaker levels sometimes overlook a useful optional move
    if(found && level<2 && rng()%(level==0?2:4)==0) return false;
    return found;
+}
+
+// Strict obligation, checked at the moment of a move: while some card can go to a foundation, the only
+// allowed moves are foundation moves. Any other move (to a column, onto the opponent's piles...) means the
+// player forgot, and loses the turn (the move itself is not carried out).
+inline bool breaksObligation(const Game& g,int p,int dst){
+   Move m;
+   return ptype(dst)!=PT_FND && g.mandatory(p,m);
 }
 
 // What a click on the card at the top of `src` does for the player (player 0): the best of ALL legal moves.
