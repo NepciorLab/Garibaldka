@@ -87,7 +87,6 @@ EN = [
 ("Zmiany działa", "Changes take effect at once and are saved in the .ini file"),
 ("Sprawdzaj akt", "Check for updates when the game starts"),
 ("Gra pyta w se", "The game asks GitHub whether a newer version exists and offers to install it."),
-("Język", "Language"),
 (", zbudowana ", ", built "),
 ("Obok programu", "Next to the program are the files: Garibaldi.ini (settings and statistics), Garibaldi.sav (the saved game, kept up to date) and garibaldka_ruchy.log (a record of all moves, for analysis)."),
 ("Poziom gry (k", "Game level (computer)"),

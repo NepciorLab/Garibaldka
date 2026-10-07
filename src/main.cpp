@@ -338,6 +338,7 @@ static std::vector<uint32_t> g_fireImg;
 static ID2D1Bitmap* g_fireBmp=nullptr;
 static double g_fireAcc=0;
 static void bowlRelease();
+static void flagRelease();
 static std::wstring g_status; static bool g_statusErr=false; static double g_statusUntil=0;
 static double g_dealUntil=0, g_aiAt=0, g_fwLast=0, g_overAt=0;
 static bool   g_overShown=false, g_dirty=true;
@@ -1133,7 +1134,7 @@ static bool ensureRT(){
 }
 static void discardRT(){
    if(g_fireBmp){ g_fireBmp->Release(); g_fireBmp=nullptr; }
-   bowlRelease();
+   bowlRelease(); flagRelease();
    if(g_fwBmp){ g_fwBmp->Release(); g_fwBmp=nullptr; g_fwBw=0; }
    g_ren.setRT(nullptr,nullptr); CardImagesD2D::instance().invalidate();
    if(g_rt){ g_rt->Release(); g_rt=nullptr; }
@@ -1776,6 +1777,56 @@ static void uiHeading(const std::wstring& t,float x,float y,float w){
 }
 static void uiNote(const std::wstring& t,float x,float y,float w,float h){ txtWrap(t,x,y,w,h,13.5f,0.76f,0.84f,0.78f,1.f); }
 
+// ---- flags of the languages: drawn once into bitmaps, then shown as a waving cloth (strips shifted by a sine, shaded by its slope)
+static ID2D1Bitmap* g_flagBmp[2]={};                      // 0 = Poland, 1 = United Kingdom
+static void flagRelease(){ for(auto& b:g_flagBmp) if(b){ b->Release(); b=nullptr; } }
+static void buildFlags(){
+   const float W=84.f, H=56.f;                                                   // exactly the size on the screen: no resampling, no moire
+   for(int f=0;f<2;f++){
+      if(g_flagBmp[f]) continue;
+      ID2D1BitmapRenderTarget* rt=nullptr;
+      if(FAILED(g_rt->CreateCompatibleRenderTarget(D2D1::SizeF(W,H),&rt))) return;
+      auto brush=[&](float r,float g,float b)->ID2D1SolidColorBrush*{ ID2D1SolidColorBrush* br=nullptr; rt->CreateSolidColorBrush(D2D1::ColorF(r,g,b,1.f),&br); return br; };
+      rt->BeginDraw();
+      if(f==0){                                                                  // Poland: white over red
+         ID2D1SolidColorBrush* w=brush(1.f,1.f,1.f); ID2D1SolidColorBrush* r=brush(0.863f,0.078f,0.235f);
+         if(w) rt->FillRectangle(D2D1::RectF(0,0,W,H*0.5f),w);
+         if(r) rt->FillRectangle(D2D1::RectF(0,H*0.5f,W,H),r);
+         if(w) w->Release(); if(r) r->Release();
+      } else {                                                                   // United Kingdom: the Union Jack
+         ID2D1SolidColorBrush* bl=brush(0.004f,0.129f,0.412f); ID2D1SolidColorBrush* w=brush(1.f,1.f,1.f); ID2D1SolidColorBrush* r=brush(0.784f,0.063f,0.180f);
+         if(bl) rt->FillRectangle(D2D1::RectF(0,0,W,H),bl);
+         if(w){ rt->DrawLine(D2D1::Point2F(0,0),D2D1::Point2F(W,H),w,10.5f); rt->DrawLine(D2D1::Point2F(W,0),D2D1::Point2F(0,H),w,10.5f); }
+         if(r){ rt->DrawLine(D2D1::Point2F(0,0),D2D1::Point2F(W,H),r,3.5f); rt->DrawLine(D2D1::Point2F(W,0),D2D1::Point2F(0,H),r,3.5f); }
+         if(w){ rt->FillRectangle(D2D1::RectF(0,H*0.5f-9.f,W,H*0.5f+9.f),w); rt->FillRectangle(D2D1::RectF(W*0.5f-9.f,0,W*0.5f+9.f,H),w); }
+         if(r){ rt->FillRectangle(D2D1::RectF(0,H*0.5f-5.f,W,H*0.5f+5.f),r); rt->FillRectangle(D2D1::RectF(W*0.5f-5.f,0,W*0.5f+5.f,H),r); }
+         if(bl) bl->Release(); if(w) w->Release(); if(r) r->Release();
+      }
+      rt->EndDraw(); rt->GetBitmap(&g_flagBmp[f]); rt->Release();
+   }
+}
+// A flag on a pole at (x,y), w x h big, waving in the wind (t = seconds). The chosen flag waves more strongly and is not dimmed.
+static void drawFlag(int which,float x,float y,float w,float h,bool chosen,double t){
+   buildFlags(); if(!g_flagBmp[which]) return;
+   const int N=28; const float sw=w/N, amp=chosen?4.6f:2.4f, op=chosen?1.f:0.62f; const float PI2=6.2831853f;
+   ID2D1SolidColorBrush* shade=nullptr; g_rt->CreateSolidColorBrush(D2D1::ColorF(0,0,0,1.f),&shade);
+   ID2D1SolidColorBrush* lite=nullptr;  g_rt->CreateSolidColorBrush(D2D1::ColorF(1,1,1,1.f),&lite);
+   for(int i=0;i<N;i++){
+      float u=(float)i/N, ph=PI2*(1.15f*u-0.55f*(float)t+(which?0.37f:0.f));
+      float dy=amp*u*std::sin(ph)*1.0f, slope=std::cos(ph);                              // the cloth is fixed at the pole: the swing grows with u
+      D2D1_RECT_F dst=D2D1::RectF(x+i*sw,y+dy,x+(i+1)*sw,y+dy+h);
+      D2D1_RECT_F src=D2D1::RectF(i*84.f/N,0,(i+1)*84.f/N,56.f);
+      g_rt->DrawBitmap(g_flagBmp[which],dst,op,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,&src);
+      if(slope>0.f && shade){ shade->SetOpacity(0.20f*slope*u*op); g_rt->FillRectangle(dst,shade); }
+      else if(slope<0.f && lite){ lite->SetOpacity(0.15f*-slope*u*op); g_rt->FillRectangle(dst,lite); }
+   }
+   if(shade) shade->Release(); if(lite) lite->Release();
+   ID2D1SolidColorBrush* pole=nullptr;                                                       // the pole
+   if(SUCCEEDED(g_rt->CreateSolidColorBrush(D2D1::ColorF(0.86f,0.72f,0.30f,chosen?1.f:0.7f),&pole))){
+      g_rt->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(x-3.f,y-6.f,x,y+h+16.f),1.5f,1.5f),pole);
+      g_rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x-1.5f,y-7.f),3.f,3.f),pole); pole->Release(); }
+}
+
 static std::wstring fileBase(const std::wstring& p){ size_t k=p.find_last_of(L"\\/"); return k==std::wstring::npos?p:p.substr(k+1); }
 
 static void settingsDraw(){
@@ -1800,10 +1851,19 @@ static void settingsDraw(){
    case 0:{                                                                  // General
       uiCheck(g_set.hits,cx,y,cw,T(L"Sprawdzaj aktualizacje przy starcie gry"),g_checkUpdates,0); y+=34;
       uiNote(T(L"Gra pyta w serwisie GitHub, czy jest nowsza wersja, i proponuje jej zainstalowanie."),cx+32,y,cw-32,40); y+=56;
-      txt(T(L"Język"),cx,y,200,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
-      { float bx=cx+210; for(size_t i=0;i<i18n::all().size();i++){ const auto& L=i18n::all()[i]; float w=std::max(110.f,(float)L.name.size()*9.f+30.f);
-           uiButton(g_set.hits,bx,y,w,36,L.name,SH_LANG,(int)i,(int)i==i18n::cur()); bx+=w+10.f; } }
-      y+=58;
+      { float bx=cx+10.f; const float fw=84.f, fh=56.f;                                              // the language: flags that wave
+        for(size_t i=0;i<i18n::all().size();i++){
+           const auto& L=i18n::all()[i]; const bool on=((int)i==i18n::cur());
+           const int fi= L.code==L"pl"?0 : L.code==L"en"?1 : -1;
+           float cw2=(fi>=0)?fw+34.f:std::max(110.f,(float)L.name.size()*9.f+30.f);
+           if(fi>=0){
+              drawFlag(fi,bx+8.f,y+8.f,fw,fh,on,nowSec());
+              if(on) rrect(bx+8.f,y+fh+24.f,fw,3.f,1.5f,1.f,0.86f,0.30f,1.f);                      // a gold line under the chosen one
+              txt(L.name,bx-8.f,y+fh+27.f,fw+34.f,22,13,0.92f,0.95f,0.92f,on?1.f:0.7f,on);
+              uiHit(g_set.hits,bx-4.f,y,fw+26.f,fh+52.f,SH_LANG,(int)i);
+           } else uiButton(g_set.hits,bx,y+10.f,cw2,36,L.name,SH_LANG,(int)i,on);
+           bx+=cw2+16.f; } }
+      y+=56.f+60.f;
       uiNote(std::wstring(T(L"Wersja "))+APP_VERSION+T(L", zbudowana ")+buildDateText()+L".",cx,y,cw,22); y+=34;
       uiNote(T(L"Obok programu leżą pliki: Garibaldi.ini (ustawienia i statystyki), Garibaldi.sav (zapis gry, tworzony na bieżąco) i garibaldka_ruchy.log (zapis wszystkich ruchów do analizy)."),cx,y,cw,70);
       break;}
@@ -2733,7 +2793,7 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
       aiTick(now);
       if(g_fw.active() && now-g_fwLast>=0.016){ g_fw.update((float)(now-g_fwLast),(int)G.w,(int)G.h); g_fwLast=now; g_dirty=true; }
       bool flameBurning=g_flame.lit||g_flame.scale>0.01f||g_flame.igniteAt>0;
-      bool anim=anyAnimating(now)||g_plan.active||g_dragging||g_prev.active||g_start.active||g_rev.active||g_deal.active||g_fw.active()||!g_emotes.empty()||(g_game.over&&g_overShown&&now-g_overAt<1.0);
+      bool anim=anyAnimating(now)||(g_set.open&&g_setGroup==0)||g_plan.active||g_dragging||g_prev.active||g_start.active||g_rev.active||g_deal.active||g_fw.active()||!g_emotes.empty()||(g_game.over&&g_overShown&&now-g_overAt<1.0);
       if(anim||g_dirty){ render(); if(!anim) continue; Sleep(1); }
       else if(flameBurning){ render(); MsgWaitForMultipleObjects(0,nullptr,FALSE,12,QS_ALLINPUT); }   // only the flame moves: ~60 fps without a busy loop
       else MsgWaitForMultipleObjects(0,nullptr,FALSE,25,QS_ALLINPUT);

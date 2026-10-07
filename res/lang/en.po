@@ -334,9 +334,6 @@ msgstr "Check for updates when the game starts"
 msgid "Gra pyta w serwisie GitHub, czy jest nowsza wersja, i proponuje jej zainstalowanie."
 msgstr "The game asks GitHub whether a newer version exists and offers to install it."
 
-msgid "Język"
-msgstr "Language"
-
 msgid ", zbudowana "
 msgstr ", built "
 
