@@ -16,7 +16,7 @@ struct FluidFlame{
    float time=0.f;
    int j0=0, j1=-1;                // rows that are simulated this step (the rest of the tall domain is empty)
    // tuning (design pixels, seconds)
-   float buoy=1500.f, drag=1.3f, vort=10.f, burn=2.4f, smokeRate=0.55f, smokeDecay=0.8f, srcSpeed=300.f, spread=0.16f;
+   float buoy=1500.f, drag=1.3f, vort=10.f, burn=3.1f, smokeRate=0.55f, smokeDecay=0.8f, srcSpeed=300.f, spread=0.16f;
 
    void init(float width,float height,float cell=3.f){
       h=cell; nx=std::max(8,(int)(width/h)); ny=std::max(8,(int)(height/h));

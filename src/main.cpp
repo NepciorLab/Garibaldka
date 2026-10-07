@@ -1300,9 +1300,11 @@ static void drawFlame(double now){
          F.y=F.from+(F.to-F.from)*easeInOut(pr);                          // accelerates, then slows down
       } else F.y=flameCenterY(F.player);
    }
-   const float cx=G.x0-G.fs*0.5f-2.f;
-   const float H=G.ch*0.92f*F.scale, W=G.fs*0.78f*F.scale;
-   const float by=F.y+G.ch*0.44f;                                         // base of the flame
+   const float sc=std::max(0.4f,G.ch/130.f);                             // design px -> screen px (a card is 130 high)
+   const float cx=std::max(G.x0-40.f*sc,36.f*sc+4.f);                     // clear of the cards, but on the screen
+   const float by=F.y+G.ch*0.44f;                                         // bottom of the bowl
+   const float bowlH=24.f*sc, rimY=by-bowlH;                              // the flame comes out of the rim
+   const float H=G.ch*0.92f*F.scale*0.8f, W=G.fs*0.78f*F.scale;
    const float t=(float)now, fl=0.5f+0.5f*std::sin(t*13.f)*std::sin(t*7.3f+1.f);   // flicker 0..1
    const float a=std::min(1.f,F.scale*1.6f);
    auto P=[](float x,float y){ return D2D1::Point2F(x,y); };
@@ -1314,15 +1316,46 @@ static void drawFlame(double now){
       if(SUCCEEDED(g_rt->CreateGradientStopCollection(gs,2,&st))){
          ID2D1RadialGradientBrush* rb=nullptr;
          float rx=W*2.1f+1.f, ry=H*0.9f+1.f;
-         if(SUCCEEDED(g_rt->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(P(cx,by-H*0.35f),P(0,0),rx,ry),st,&rb))){
-            g_rt->FillEllipse(D2D1::Ellipse(P(cx,by-H*0.35f),rx,ry),rb); rb->Release();
+         if(SUCCEEDED(g_rt->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(P(cx,rimY-H*0.35f),P(0,0),rx,ry),st,&rb))){
+            g_rt->FillEllipse(D2D1::Ellipse(P(cx,rimY-H*0.35f),rx,ry),rb); rb->Release();
          }
          st->Release();
       }
    }
+   // The golden bowl the flame comes out of: back (body + dark inside) now, the front lip after the fire.
+   const float bw=64.f*sc, bh=bowlH, ex=bw*0.5f, ery=6.f*sc, ba=std::min(1.f,F.scale*2.5f);
+   auto gold=[&](float x0,float x1,float y0,float y1,float al,bool vertical)->ID2D1LinearGradientBrush*{
+      ID2D1GradientStopCollection* st=nullptr; D2D1_GRADIENT_STOP gs[5]={
+         {0.00f,D2D1::ColorF(0.45f,0.30f,0.05f,al)},{0.22f,D2D1::ColorF(0.93f,0.72f,0.20f,al)},{0.45f,D2D1::ColorF(1.00f,0.92f,0.55f,al)},
+         {0.70f,D2D1::ColorF(0.80f,0.55f,0.10f,al)},{1.00f,D2D1::ColorF(0.38f,0.24f,0.04f,al)}};
+      ID2D1LinearGradientBrush* br=nullptr;
+      if(SUCCEEDED(g_rt->CreateGradientStopCollection(gs,5,&st))){
+         g_rt->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(P(vertical?x0:x0,y0),P(vertical?x0:x1,vertical?y1:y0)),st,&br); st->Release(); }
+      return br; };
+   if(ba>0.01f && g_d2d){
+      // body: a bowl (half ellipse) on a short foot
+      ID2D1PathGeometry* body=nullptr;
+      if(SUCCEEDED(g_d2d->CreatePathGeometry(&body))){
+         ID2D1GeometrySink* sk=nullptr;
+         if(SUCCEEDED(body->Open(&sk))){
+            sk->BeginFigure(P(cx-ex,rimY),D2D1_FIGURE_BEGIN_FILLED);
+            sk->AddBezier(D2D1::BezierSegment(P(cx-ex,rimY+bh*0.62f),P(cx-ex*0.45f,rimY+bh*0.78f),P(cx-ex*0.22f,rimY+bh*0.80f)));
+            sk->AddLine(P(cx-ex*0.40f,by)); sk->AddLine(P(cx+ex*0.40f,by)); sk->AddLine(P(cx+ex*0.22f,rimY+bh*0.80f));
+            sk->AddBezier(D2D1::BezierSegment(P(cx+ex*0.45f,rimY+bh*0.78f),P(cx+ex,rimY+bh*0.62f),P(cx+ex,rimY)));
+            sk->EndFigure(D2D1_FIGURE_END_CLOSED); sk->Close(); sk->Release();
+            ID2D1LinearGradientBrush* gb=gold(cx-ex,cx+ex,rimY,rimY,ba,false);
+            if(gb){ g_rt->FillGeometry(body,gb); gb->Release(); }
+            ID2D1SolidColorBrush* ob=nullptr;
+            if(SUCCEEDED(g_rt->CreateSolidColorBrush(D2D1::ColorF(0.30f,0.19f,0.03f,0.85f*ba),&ob))){ g_rt->DrawGeometry(body,ob,1.2f); ob->Release(); }
+         }
+         body->Release();
+      }
+      // inside of the bowl (dark, lit by the fire from above)
+      { ID2D1SolidColorBrush* ib=nullptr;
+        if(SUCCEEDED(g_rt->CreateSolidColorBrush(D2D1::ColorF(0.40f,0.20f,0.03f,ba),&ib))){ g_rt->FillEllipse(D2D1::Ellipse(P(cx,rimY),ex*0.97f,ery),ib); ib->Release(); } }
+   }
    // The fire: a fluid simulation in design pixels (a card is 130 high), drawn as a soft bitmap. The burner moves with
    // the flame's turn marker; the burning gas stays where it was, so a moving flame leaves a curved trail that rises.
-   const float sc=std::max(0.4f,G.ch/130.f*1.0f);                       // design px -> screen px
    static float kS=0,kH=0,kX=0;
    if(!g_fire.ready()||std::fabs(kS-sc)>0.001f||std::fabs(kH-G.h)>0.5f||std::fabs(kX-cx)>0.5f){
       kS=sc; kH=G.h; kX=cx; g_fire.init(140.f,G.h/sc,3.f);
@@ -1332,7 +1365,7 @@ static void drawFlame(double now){
    g_fireAcc=std::min(g_fireAcc+dt,0.1);
    const float strength=F.lit?F.scale:0.f;
    while(g_fireAcc>=1.0/60.0){
-      g_fire.step(1.f/60.f,70.f,by/sc,66.f*(0.55f+0.45f*F.scale),strength);
+      g_fire.step(1.f/60.f,70.f,(rimY+3.f*sc)/sc,50.f*(0.55f+0.45f*F.scale),strength);
       g_fireAcc-=1.0/60.0;
    }
    g_fire.render(g_fireImg.data());
@@ -1344,6 +1377,25 @@ static void drawFlame(double now){
       g_fireBmp->CopyFromMemory(nullptr,g_fireImg.data(),(UINT32)g_fire.nx*4);
       const float ox=cx-70.f*sc;
       g_rt->DrawBitmap(g_fireBmp,D2D1::RectF(ox,0.f,ox+g_fire.nx*g_fire.h*sc,g_fire.ny*g_fire.h*sc),1.f,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+   }
+   if(ba>0.01f && g_d2d){
+      // front lip of the rim: the lower half of the rim ellipse, a thick gold band over the foot of the flame
+      ID2D1PathGeometry* lip=nullptr;
+      if(SUCCEEDED(g_d2d->CreatePathGeometry(&lip))){
+         ID2D1GeometrySink* sk=nullptr;
+         if(SUCCEEDED(lip->Open(&sk))){
+            sk->BeginFigure(P(cx-ex-1.5f*sc,rimY-1.f*sc),D2D1_FIGURE_BEGIN_FILLED);
+            sk->AddArc(D2D1::ArcSegment(P(cx+ex+1.5f*sc,rimY-1.f*sc),D2D1::SizeF(ex+1.5f*sc,ery+1.5f*sc),0.f,D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE,D2D1_ARC_SIZE_SMALL));
+            sk->AddLine(P(cx+ex*0.97f,rimY)); 
+            sk->AddArc(D2D1::ArcSegment(P(cx-ex*0.97f,rimY),D2D1::SizeF(ex*0.97f,ery),0.f,D2D1_SWEEP_DIRECTION_CLOCKWISE,D2D1_ARC_SIZE_SMALL));
+            sk->EndFigure(D2D1_FIGURE_END_CLOSED); sk->Close(); sk->Release();
+            ID2D1LinearGradientBrush* gb=gold(cx-ex,cx+ex,rimY,rimY,ba,false);
+            if(gb){ g_rt->FillGeometry(lip,gb); gb->Release(); }
+            ID2D1SolidColorBrush* ob=nullptr;
+            if(SUCCEEDED(g_rt->CreateSolidColorBrush(D2D1::ColorF(0.30f,0.19f,0.03f,0.8f*ba),&ob))){ g_rt->DrawGeometry(lip,ob,1.1f); ob->Release(); }
+         }
+         lip->Release();
+      }
    }
 }
 
