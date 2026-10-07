@@ -28,6 +28,7 @@
 #include "update.h"
 #include "keys.h"
 #include "fluidflame.h"
+#include "fireworks2.h"
 
 // ============================================================================
 // Globals
@@ -42,7 +43,10 @@ static Layout                 g_lay;
 
 static Game          g_game;
 static AIContext     g_ctx;
-static FireworkSystem g_fw;
+static Fireworks2 g_fw;                    // the fireworks of a won game (see fireworks2.h): drawn as one additive image
+static std::vector<uint32_t> g_fwImg;
+static ID2D1Bitmap* g_fwBmp=nullptr;
+static int g_fwBw=0, g_fwBh=0;
 static int   g_level=1;            // 0 easy, 1 normal, 2 hard
 static bool  g_muted=false;
 static int   g_volPct=100;
@@ -1124,6 +1128,7 @@ static bool ensureRT(){
 static void discardRT(){
    if(g_fireBmp){ g_fireBmp->Release(); g_fireBmp=nullptr; }
    bowlRelease();
+   if(g_fwBmp){ g_fwBmp->Release(); g_fwBmp=nullptr; g_fwBw=0; }
    g_ren.setRT(nullptr,nullptr); CardImagesD2D::instance().invalidate();
    if(g_rt){ g_rt->Release(); g_rt=nullptr; }
 }
@@ -1179,40 +1184,18 @@ static void countPill(int id){
 }
 
 static void drawFireworks(){
-   for(auto& fwk:g_fw.fireworks()){
-      if(!fwk.exploded){
-         g_ren.drawLine(fwk.px,fwk.py,fwk.x,fwk.y,1.8f,fwk.cr,fwk.cg,fwk.cb,120);
-         g_ren.drawEllipse(fwk.x,fwk.y,2.5f,255,255,220,220);
-      } else {
-         if(fwk.flashLife>0){
-            float bf=(float)fwk.flashLife/7.f, radius=70.f*bf+30.f;
-            ID2D1GradientStopCollection* stops=nullptr; D2D1_GRADIENT_STOP gs[3];
-            gs[0].position=0.0f; gs[0].color=D2D1::ColorF(1,1,1,bf*0.9f);
-            gs[1].position=0.4f; gs[1].color=D2D1::ColorF(1,0.95f,0.8f,bf*0.55f);
-            gs[2].position=1.0f; gs[2].color=D2D1::ColorF(1,0.8f,0.4f,0.f);
-            if(SUCCEEDED(g_rt->CreateGradientStopCollection(gs,3,&stops))){
-               ID2D1RadialGradientBrush* br=nullptr;
-               auto rp=D2D1::RadialGradientBrushProperties(D2D1::Point2F(fwk.x,fwk.y),D2D1::Point2F(0,0),radius,radius);
-               if(SUCCEEDED(g_rt->CreateRadialGradientBrush(rp,stops,&br))){
-                  g_rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(fwk.x,fwk.y),radius,radius),br); br->Release();
-               }
-               stops->Release();
-            }
-         }
-         for(auto& p:fwk.parts){
-            float t=(float)p.life/(float)p.maxLife, af=1.f-t*t;
-            BYTE al=(BYTE)(af*255.f); if(al<5) continue;
-            if(p.strobe&&(p.life%2)==1) continue;
-            BYTE r=(BYTE)(p.r*(1.f-t)+p.er*t), g=(BYTE)(p.g*(1.f-t)+p.eg*t), b=(BYTE)(p.b*(1.f-t)+p.eb*t);
-            if(!p.spark&&!p.sub){
-               float dx=p.x-p.px,dy=p.y-p.py;
-               if(std::sqrt(dx*dx+dy*dy)>0.4f)
-                  g_ren.drawLine(p.px,p.py,p.x,p.y,std::max(0.6f,p.size*0.55f*(1.f-t*0.5f)),r,g,b,BYTE(al*0.5f));
-            }
-            float sz=p.size*(1.f-t*0.55f);
-            if(sz>0.25f) g_ren.drawEllipse(p.x,p.y,sz,r,g,b,al);
-         }
-      }
+   if(!g_fw.active()||!g_rt) return;
+   const float rs=0.6f;                                                    // the image is drawn at 60% size and stretched (it is soft anyway)
+   const int bw=std::max(16,(int)(G.w*rs)), bh=std::max(16,(int)(G.h*rs));
+   if(bw!=g_fwBw||bh!=g_fwBh){ g_fwBw=bw; g_fwBh=bh; g_fwImg.assign((size_t)bw*bh,0u); if(g_fwBmp){ g_fwBmp->Release(); g_fwBmp=nullptr; } }
+   g_fw.render(g_fwImg.data(),bw,bh);
+   if(!g_fwBmp){
+      D2D1_BITMAP_PROPERTIES bp=D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));
+      g_rt->CreateBitmap(D2D1::SizeU((UINT32)bw,(UINT32)bh),nullptr,0,bp,&g_fwBmp);
+   }
+   if(g_fwBmp){
+      g_fwBmp->CopyFromMemory(nullptr,g_fwImg.data(),(UINT32)bw*4);          // alpha 0: the light is added to the table
+      g_rt->DrawBitmap(g_fwBmp,D2D1::RectF(0.f,0.f,G.w,G.h),1.f,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
    }
 }
 
@@ -2730,7 +2713,7 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
       { static double lastPing=0;                      // the server connection is kept alive (answered by the server with #PONG)
         if(g_net.online&&g_ws.connected()&&now-lastPing>20.0){ g_ws.sendLine("#PING"); lastPing=now; } }
       aiTick(now);
-      if(g_fw.active() && now-g_fwLast>=0.028){ g_fw.tick((int)G.w,(int)G.h); g_fwLast=now; g_dirty=true; }
+      if(g_fw.active() && now-g_fwLast>=0.016){ g_fw.update((float)(now-g_fwLast),(int)G.w,(int)G.h); g_fwLast=now; g_dirty=true; }
       bool flameBurning=g_flame.lit||g_flame.scale>0.01f||g_flame.igniteAt>0;
       bool anim=anyAnimating(now)||g_plan.active||g_dragging||g_prev.active||g_start.active||g_rev.active||g_deal.active||g_fw.active()||!g_emotes.empty()||(g_game.over&&g_overShown&&now-g_overAt<1.0);
       if(anim||g_dirty){ render(); if(!anim) continue; Sleep(1); }
