@@ -72,3 +72,10 @@ Licencja kodu przejętego z Pasjansa Dziadkowego: MIT (plik `LICENSE`).
 ## Zapis ruchów
 
 Gra zapisuje każdą partię i każdy ruch (także komputera i przeciwnika w sieci) do pliku `garibaldka_ruchy.log` obok programu: kto, co zagrał, jakie ruchy były wtedy możliwe i pełny stan gry przed ruchem. Podejrzane decyzje są oznaczone słowem CHECK (np. odrzucenie karty, którą dało się zagrać). Plik nie rośnie ponad ok. 12 MB (starsza część trafia do `.old`).
+
+## Ustawienia, hot seat, statystyki
+
+- **Ustawienia** (F3): *Ogólne* (aktualizacje), *Rozgrywka* (poziom komputera, automatyczne ruchy, przymus fundamentu: „Karaj” albo „Przypomnij”), *Grafika* (na razie pusta), *Dźwięk* (głośność, własne dźwięki WAV/MP3 dla każdego zdarzenia), *Sterowanie* (własne skróty klawiszowe, po dwa na akcję). Wszystko, łącznie z ostatnio wybraną grupą, zapisuje się w pliku `.ini`.
+- **Hot seat** (F7): dwóch graczy przy jednym komputerze (Gracz 1 na dole, Gracz 2 na górze). Cofnąć można ruchy z własnej tury. Takie partie nie są liczone w statystykach.
+- **Statystyki** (F4): rozegrane i wygrane partie oraz % wygranych dla każdego poziomu komputera i dla gry przez sieć.
+- **Graj przez sieć** (F5): hasło serwera jest wpisane domyślnie.

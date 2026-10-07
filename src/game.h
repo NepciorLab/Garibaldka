@@ -299,12 +299,12 @@ inline bool isRunFrom(const Game& g,int src,int idx){
    }
    return true;
 }
-inline bool planSequenceMove(const Game& g,int src,int idx,int dst,std::vector<Move>& plan,int maxMoves=40){
+inline bool planSequenceMove(const Game& g,int src,int idx,int dst,std::vector<Move>& plan,int maxMoves=40,int p=0){
    plan.clear();
    if(ptype(src)!=PT_TAB||ptype(dst)!=PT_TAB||src==dst||!isRunFrom(g,src,idx)) return false;
    const auto& sp=g.pile[src]; const int n=(int)sp.size(), k=n-idx;
-   if(!g.canPlace(sp[idx],dst,0,src)) return false;                 // the first card must fit on dst
-   if(k==1){ if(!g.canMove(src,dst,0)) return false; plan.push_back({src,dst}); return true; }
+   if(!g.canPlace(sp[idx],dst,p,src)) return false;                 // the first card must fit on dst
+   if(k==1){ if(!g.canMove(src,dst,p)) return false; plan.push_back({src,dst}); return true; }
 
    Card info[104]; bool isRun[104]={};
    for(int j=0;j<NUM_TAB;j++) for(const Card& c:g.pile[tabId(j)]) info[c.id]=c;
@@ -499,11 +499,11 @@ inline bool breaksObligation(const Game& g,int p,int dst){
 // The computer's valuation only ranks them; even a move the computer would never choose is played when it is
 // the only one (the click is the player's decision, and there is Undo). false = no legal move at all
 // (for the turned card the caller then discards it to the waste pile).
-inline bool bestClickMove(const Game& g,int src,Move& out){
+inline bool bestClickMove(const Game& g,int src,Move& out,int p=0){
    AIContext none; float best=-1e9f; bool found=false;
    for(int d=0;d<NP;d++){
-      if(!g.canMove(src,d,0)) continue;
-      float sc=scoreMove(g,{src,d},0,none,2);
+      if(!g.canMove(src,d,p)) continue;
+      float sc=scoreMove(g,{src,d},p,none,2);
       if(sc>best){ best=sc; out={src,d}; found=true; }
    }
    return found;

@@ -3,7 +3,7 @@
 # of that window only (PrintWindow).
 #   powershell -ExecutionPolicy Bypass -File tools/uitest.ps1 -Actions "click 538 750; wait 900; shot a.png"
 # Actions: chars TEXT | char CODE | click X Y | drag X0 Y0 X1 Y1 | dbl X Y | key VK_DEC | wait MS | shot NAME   (client coordinates)
-param([string]$Actions,[int]$Which=1)
+param([string]$Actions,[int]$Which=1,[int]$ProcId=0)   # -ProcId: drive exactly this process (never touch another running copy of the game)
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;using System.Runtime.InteropServices;
@@ -16,7 +16,7 @@ public class U{
  public static IntPtr LP(int x,int y){return (IntPtr)((y<<16)|(x&0xFFFF));}
 }
 "@
-$p=(Get-Process Garibaldi -ErrorAction Stop | Sort-Object StartTime)[$Which-1]
+if($ProcId -gt 0){ $p=Get-Process -Id $ProcId -ErrorAction Stop } else { $p=(Get-Process Garibaldi -ErrorAction Stop | Sort-Object StartTime)[$Which-1] }
 $h=$p.MainWindowHandle
 function Msg($m,$w,$x,$y){[U]::PostMessage($h,$m,[IntPtr]$w,[U]::LP($x,$y))|Out-Null}
 foreach($a in $Actions.Split(';')){
