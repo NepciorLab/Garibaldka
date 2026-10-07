@@ -482,8 +482,13 @@ inline bool aiChoose(const Game& g,int p,const AIContext& ctx,int level,std::mt1
       float sc=base+moveNoise(level,rng);
       if(sc>best){ best=sc; out=m; found=true; }
    }
-   // weaker levels sometimes overlook a useful optional move
-   if(found && level<2 && rng()%(level==0?2:4)==0) return false;
+   // The weaker levels sometimes overlook a useful optional move - but never one that takes a card off the magazine
+   // (getting rid of the magazine is the priority; Normal never overlooks it, Easy only now and then).
+   if(found && level<2){
+      const bool fromRes=ptype(out.src)==PT_RES;
+      unsigned oneIn = level==0 ? (fromRes?5u:2u) : (fromRes?0u:4u);
+      if(oneIn && rng()%oneIn==0) return false;
+   }
    return found;
 }
 

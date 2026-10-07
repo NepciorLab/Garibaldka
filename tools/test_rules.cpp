@@ -66,6 +66,23 @@ int main(){
       for(const Move& m:legalMoves(g,0)) if(m.src==src && ptype(m.dst)==PT_TAB && g.pile[m.dst].empty()) found|=scoreMove(g,m,0,cx,2)>scoreMove(g,{src,tabId(0)},0,cx,2);
       CHECK(!found,"the free column never beats the card in the valuation");
    }
+   // --- 2c. The magazine has priority: 5 clubs on top of 6 clubs, red 6 and red 7 on the table: BOTH cards go,
+   //         on Normal and Hard every single time (the weaker levels used to give up at random).
+   for(int lvl=1;lvl<=2;lvl++){
+      int both=0;
+      for(int i=0;i<200;i++){
+         Game g=empty(); g.rng.seed(1000+i);
+         g.pile[resId(0)]={mk(Spades,3,0,false),mk(Clubs,6,0,false),mk(Clubs,5,0,true)};
+         g.pile[resId(1)]={mk(Hearts,5,1,false),mk(Hearts,9,1)};
+         g.pile[tabId(0)]={mk(Hearts,6,1)}; g.pile[tabId(1)]={mk(Diamonds,7,1)};
+         for(int j=2;j<8;j++) g.pile[tabId(j)]={mk(Spades,2+j,1)};
+         g.pile[handId(0)]={mk(Hearts,2,0,false)};
+         AIContext cx; int moved=0;
+         for(int st=0;st<6&&g.turn==0;st++){ Step r=aiStep(g,0,cx,lvl); if(r.kind==ST_MOVE&&r.m.src==resId(0)) moved++; else break; }
+         if(moved>=2) both++;
+      }
+      CHECK(both==200,lvl==1?"Normal plays both magazine cards (5 clubs, then 6 clubs) every time":"Hard plays both magazine cards every time");
+   }
    // --- 3. Obligation: a turned ace is always played on the foundation (every level).
    for(int lvl=0;lvl<3;lvl++){
       Game g=empty();
