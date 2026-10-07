@@ -60,3 +60,21 @@ prawdziwym pozbyciem się wszystkich kart (średnio ok. 56 tur), a ok. 9% remise
   traci turę (nic się wtedy nie dobiera ani nie odrzuca). Podpowiedź (H) zawsze wskazuje taką kartę w pierwszej kolejności.
 * **Kliknięcie karty** przenosi ją na najlepszy z WSZYSTKICH dozwolonych ruchów, według tej samej oceny co ruchy komputera (ocena tylko szereguje ruchy: nawet ruch, którego komputer by nie wykonał, zostanie wykonany, jeśli jest jedyny, a cofnięcie jest zawsze pod ręką). Dobraną kartę odrzuca na śmietnik wyłącznie wtedy, gdy nie ma dla niej żadnego innego ruchu.
   nie ma nic lepszego (ocena do 20 punktów), odrzuca na śmietnik.
+
+## Looking ahead (since 1.2.2)
+
+A turn is a series of moves, so the computer plans a series instead of one move at a time. It tries the candidate
+moves, then the candidates on the position after each of them, and so on, and plays the first move of the best series.
+The depth is the difference between the levels:
+
+| Level  | Moves looked ahead | Other |
+|--------|--------------------|-------|
+| Easy   | 1                  | still overlooks a move now and then |
+| Normal | 2                  | never overlooks a move |
+| Hard   | 4                  | never overlooks a move |
+
+A series is valued as the sum of its moves' values (`scoreMove`), later moves counting 10% less. A move worth nothing
+by itself is played when it opens a valuable one (10 of clubs onto the opponent's waste, then the lone 9 of clubs
+after it, which empties a column). At every step only the best few moves are tried (a beam: 10, 8, 6 deep in the search),
+so a decision takes a fraction of a millisecond. The strict foundation obligation is respected inside the search: while
+a card can go to a foundation, that is the only candidate.

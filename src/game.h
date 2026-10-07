@@ -476,37 +476,68 @@ inline float moveNoise(int level,std::mt19937& rng){
    return (float)(rng()%1000)/1000.f*(level<=1?60.f:3.f);
 }
 
-// A move onto the opponent's waste or magazine is worth little by itself, but it may open the next move: a card of the
-// same suit one rank lower/higher now fits on it, and that can empty a column (10 of clubs onto his waste, then the
-// lone 9 of clubs after it). Value of such a "set-up" move = a share of the best follow-up move's value.
-inline float setupValue(const Game& g,const Move& m,int p,const AIContext& ctx,int level){
-   Game g2=g; const int moved=g.srcTop(m.src,p)->id; g2.doMove(m.src,m.dst,p);
-   AIContext c2=ctx; float best=0.f;
-   for(const Move& m2:legalMoves(g2,p)){
-      const Card* c=g2.srcTop(m2.src,p); if(!c||c->id==moved) continue;
-      if(ptype(m2.dst)==PT_FND) continue;                                    // (the obligation is handled elsewhere)
-      best=std::max(best,scoreMove(g2,m2,p,c2,level));
+// ---------------------------------------------------------------------------
+// Looking ahead. A turn is a series of moves by the same player, so the computer plans a series: it tries the
+// candidate moves, then (on the position after each) the candidates again, down to `searchDepth(level)` moves, and
+// plays the first move of the best series. Easy looks 1 move ahead, Normal 2, Hard 4. The value of a series is the sum of
+// the single moves' values (scoreMove), later ones counting a little less. A move worth nothing by itself (a card on the
+// opponent's waste) is played when it opens something that is worth a lot (the lone 9 of clubs after the 10 of clubs
+// empties a column). Only the best few moves are tried at every step (a beam), so the search stays fast.
+// ---------------------------------------------------------------------------
+inline int searchDepth(int level){ return level<=0?1 : level==1?2 : 4; }
+static const float PLAN_DISCOUNT=0.9f;
+
+struct Cand{ float v; Move m; };
+// the moves worth considering in this position, best first; `last` = no further move follows, so only moves worth something count
+inline void candidates(const Game& g,int p,const AIContext& ctx,int level,bool last,int width,std::vector<Cand>& out){
+   out.clear();
+   Move must;
+   if(g.mandatory(p,must)){ out.push_back({scoreMove(g,must,p,ctx,level),must}); return; }          // strict obligation: only that move
+   for(const Move& m:legalMoves(g,p)){
+      float v=scoreMove(g,m,p,ctx,level);
+      if(v<=REJECTED+1.f) continue;
+      if(last && v<=0.f) continue;
+      if(v<-80.f) continue;                                                                          // clearly harmful: not even as a set-up
+      out.push_back({v,m});
    }
-   return best>=50.f ? 15.f+0.5f*best : 0.f;
+   std::sort(out.begin(),out.end(),[](const Cand& a,const Cand& b){ return a.v>b.v; });
+   if((int)out.size()>width) out.resize(width);
+}
+inline void applyPlanned(Game& g,const Move& m,int p,AIContext& ctx){
+   const int id=g.srcTop(m.src,p)->id;
+   g.doMove(m.src,m.dst,p);
+   if(ptype(m.src)==PT_TAB && ptype(m.dst)==PT_TAB) ctx.moved.insert(id);
+}
+// the value of the best series of up to `depth` further moves (0 = it is best to stop now); ply = how deep we already are
+inline float planValue(const Game& g,int p,const AIContext& ctx,int depth,int level,int ply){
+   if(depth<=0||g.over) return 0.f;
+   static const int WIDTH[4]={64,10,8,6};
+   std::vector<Cand> cand; candidates(g,p,ctx,level,depth==1,WIDTH[std::min(ply,3)],cand);
+   float best=0.f;
+   for(const Cand& c:cand){
+      Game g2=g; AIContext c2=ctx; applyPlanned(g2,c.m,p,c2);
+      float v=c.v+(g2.over?5000.f:PLAN_DISCOUNT*planValue(g2,p,c2,depth-1,level,ply+1));
+      if(v>best) best=v;
+   }
+   return best;
 }
 
 inline bool aiChoose(const Game& g,int p,const AIContext& ctx,int level,std::mt19937& rng,Move& out){
    // Obligation (rule 1): any card that fits a foundation goes there first (strict obligation).
    if(g.mandatory(p,out)) return true;
+   const int depth=searchDepth(level);
+   std::vector<Cand> cand; candidates(g,p,ctx,level,depth==1,64,cand);
    float best=0; bool found=false;
-   for(const Move& m:legalMoves(g,p)){
-      float base=scoreMove(g,m,p,ctx,level);
-      if(base<=0 && level>=1 && (m.dst==resId(1-p)||m.dst==wasteId(1-p)) && ptype(m.src)==PT_TAB) base=setupValue(g,m,p,ctx,level);
-      if(base<=0) continue;                       // pointless move: never played
-      float sc=base+moveNoise(level,rng);
-      if(sc>best){ best=sc; out=m; found=true; }
+   for(const Cand& c:cand){
+      Game g2=g; AIContext c2=ctx; applyPlanned(g2,c.m,p,c2);
+      float total=c.v+(depth>1?(g2.over?5000.f:PLAN_DISCOUNT*planValue(g2,p,c2,depth-1,level,1)):0.f);
+      float sc=total+moveNoise(level,rng);
+      if(total>0.f && sc>best){ best=sc; out=c.m; found=true; }
    }
-   // The weaker levels sometimes overlook a useful optional move - but never one that takes a card off the magazine
-   // (getting rid of the magazine is the priority; Normal never overlooks it, Easy only now and then).
-   if(found && level<2){
+   // Easy still overlooks moves now and then (Normal and Hard never do: their weakness is how far they see)
+   if(found && level==0){
       const bool fromRes=ptype(out.src)==PT_RES;
-      unsigned oneIn = level==0 ? (fromRes?5u:2u) : (fromRes?0u:4u);
-      if(oneIn && rng()%oneIn==0) return false;
+      if(rng()%(fromRes?6u:3u)==0) return false;
    }
    return found;
 }

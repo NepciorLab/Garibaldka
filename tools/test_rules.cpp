@@ -78,7 +78,7 @@ int main(){
          for(int j=2;j<8;j++) g.pile[tabId(j)]={mk(Spades,2+j,1)};
          g.pile[handId(0)]={mk(Hearts,2,0,false)};
          AIContext cx; int moved=0;
-         for(int st=0;st<6&&g.turn==0;st++){ Step r=aiStep(g,0,cx,lvl); if(r.kind==ST_MOVE&&r.m.src==resId(0)) moved++; else break; }
+         for(int st=0;st<10&&g.turn==0;st++){ Step r=aiStep(g,0,cx,lvl); if(r.kind!=ST_MOVE) break; if(r.m.src==resId(0)) moved++; }   // (in any order: other moves may come in between)
          if(moved>=2) both++;
       }
       CHECK(both==200,lvl==1?"Normal plays both magazine cards (5 clubs, then 6 clubs) every time":"Hard plays both magazine cards every time");
