@@ -472,9 +472,9 @@ inline float scoreMove(const Game& g,const Move& m,int p,const AIContext& ctx,in
    if(dt==PT_WASTE && st==PT_TURNED) sc+=20;
    return sc;
 }
-inline float moveNoise(int level,std::mt19937& rng){
-   return (float)(rng()%1000)/1000.f*(level<=1?60.f:3.f);
-}
+// No luck in the choice any more: the same position always gives the same move, whatever the level. (The levels differ
+// only in how far they look ahead, see searchDepth.)
+inline float moveNoise(int,std::mt19937&){ return 0.f; }
 
 // ---------------------------------------------------------------------------
 // Looking ahead. A turn is a series of moves by the same player, so the computer plans a series: it tries the
@@ -534,11 +534,7 @@ inline bool aiChoose(const Game& g,int p,const AIContext& ctx,int level,std::mt1
       float sc=total+moveNoise(level,rng);
       if(total>0.f && sc>best){ best=sc; out=c.m; found=true; }
    }
-   // Easy still overlooks moves now and then (Normal and Hard never do: their weakness is how far they see)
-   if(found && level==0){
-      const bool fromRes=ptype(out.src)==PT_RES;
-      if(rng()%(fromRes?6u:3u)==0) return false;
-   }
+   // No level overlooks a move: the levels differ only in how many moves they look ahead (1, 2, 4).
    return found;
 }
 
@@ -564,6 +560,23 @@ inline bool bestClickMove(const Game& g,int src,Move& out,int p=0){
    return found;
 }
 
+// The computer never ends its turn (discard, pass) while a free column is there and a card can go into it: the cards of the
+// magazine first, then the turned card, then the top of the waste. Only a move that the judgement rejects as pointless
+// (the cover rule) is left out.
+inline bool fillFreeColumn(Game& g,int p,AIContext& ctx,int level,Step& s){
+   int freeCol=-1; for(int j=0;j<NUM_TAB;j++) if(g.pile[tabId(j)].empty()){ freeCol=tabId(j); break; }
+   if(freeCol<0) return false;
+   const int srcs[3]={resId(p),turnedId(p),wasteId(p)}; const float bonus[3]={1000.f,500.f,0.f};
+   float best=-1e9f; Move bm; bool found=false;
+   for(int k=0;k<3;k++){
+      if(!g.srcTop(srcs[k],p)||!g.canMove(srcs[k],freeCol,p)) continue;
+      float v=scoreMove(g,{srcs[k],freeCol},p,ctx,level); if(v<=REJECTED+1.f) continue;
+      v+=bonus[k]; if(v>best){ best=v; bm={srcs[k],freeCol}; found=true; }
+   }
+   if(!found) return false;
+   applyPlanned(g,bm,p,ctx); s.kind=ST_MOVE; s.m=bm; return true;
+}
+
 // One computer action: a move, else turn a card over, else discard / pass.
 inline Step aiStep(Game& g,int p,AIContext& ctx,int level){
    Step s; Move m;
@@ -573,6 +586,7 @@ inline Step aiStep(Game& g,int p,AIContext& ctx,int level){
       if(ptype(m.src)==PT_TAB && ptype(m.dst)==PT_TAB) ctx.moved.insert(id);
       s.kind=ST_MOVE; s.m=m; return s;
    }
+   if(fillFreeColumn(g,p,ctx,level,s)) return s;                 // never end the turn with a free column that can take a card
    if(g.top(turnedId(p))){ g.discard(p); s.kind=ST_DISCARD; return s; }
    if(g.canDraw(p)){ g.draw(p); s.kind=ST_DRAW; return s; }
    g.endTurn(); s.kind=ST_PASS; return s;

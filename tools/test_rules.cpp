@@ -119,6 +119,32 @@ int main(){
       CHECK(did6==N,"Hard: 6 clubs from the magazine onto the 7 of diamonds (nothing to cover)");
       CHECK(did10==N&&did9==N,"Hard: 10 and 9 of clubs onto the player's waste to free a column");
    }
+   // --- 2e. The computer never ends its turn (discards, passes) while a free column is there and a card can go into it -
+   //         on every level, over many random positions of real games.
+   for(int lvl=0;lvl<=2;lvl++){
+      int violations=0, endings=0;
+      for(int game=0;game<60;game++){
+         Game g; g.newGame((uint32_t)(900+game),false); AIContext cx;
+         for(int guard=0;guard<4000&&!g.over;guard++){
+            const int p=g.turn; Game pre=g;
+            Step r=aiStep(g,p,cx,lvl);
+            if(r.kind==ST_DISCARD||r.kind==ST_PASS){
+               endings++;
+               int freeCol=-1; for(int j=0;j<NUM_TAB;j++) if(pre.pile[tabId(j)].empty()){ freeCol=tabId(j); break; }
+               if(freeCol>=0){
+                  const int srcs[3]={resId(p),turnedId(p),wasteId(p)};
+                  for(int k=0;k<3;k++) if(pre.srcTop(srcs[k],p) && pre.canMove(srcs[k],freeCol,p)){
+                     // (a magazine/waste move that is judged pointless - the cover rule - is allowed to stay)
+                     if(scoreMove(pre,{srcs[k],freeCol},p,cx,lvl)>REJECTED+1.f) violations++;
+                  }
+               }
+               cx=AIContext();
+            }
+         }
+      }
+      char b[140]; sprintf(b,"level %d: no turn ended with a free column that could take a card (%d turns checked)",lvl,endings);
+      CHECK(violations==0,b);
+   }
    // --- 3. Obligation: a turned ace is always played on the foundation (every level).
    for(int lvl=0;lvl<3;lvl++){
       Game g=empty();

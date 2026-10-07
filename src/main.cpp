@@ -92,6 +92,7 @@ struct NetState{
    std::deque<std::string> inbox;                    // the opponent's actions waiting to be played (animated one by one)
 };
 static NetState g_net;
+static int   effForce(){ return (g_hot||g_net.playing)?0:g_forceMode; }   // "Przypomnij" is only for the game against the computer
 static net::Conn g_conn;                             // direct link (local network)
 static net::WsConn g_ws;                             // link to the online server
 static net::Link* g_link=&g_conn;                    // the one in use
@@ -992,7 +993,7 @@ static void loseTurnForForgetting(const Move& m){
 // The player tried something else while `must` still has to go to a foundation. Setting "Karaj": the turn is lost.
 // Setting "Przypomnij": nothing happens except that the forced move is shown, so the player has to make it.
 static void obligationBlocked(const Move& must){
-   if(g_forceMode==1){
+   if(effForce()==1){
       startPreview(must); snd("nono"); relayout(); g_dirty=true;
       setStatus(L"Przymus: ta karta musi najpierw trafić na fundament.",true,4);
       return;
@@ -1517,7 +1518,7 @@ static const HelpItem HELP_DOC[]={
  {HK_H,nullptr,L"Ścisły przymus"},
  {HK_P,nullptr,L"Każdą kartę, którą możesz zagrać na fundament (wierzch magazynu, dobrana karta, wierzch śmietnika lub kolumny), musisz tam dołożyć."},
  {HK_P,nullptr,L"Dopóki jakaś karta może iść na fundament, wolno zagrywać tylko na fundamenty. Kto zapomni i zagra inaczej (na kolumnę, na stos przeciwnika), dobierze kartę, odrzuci ją lub spasuje, traci turę. Takie zagranie nie zostaje wykonane."},
- {HK_P,nullptr,L"W Ustawieniach (Rozgrywka) możesz zamiast „Karaj” wybrać „Przypomnij”: wtedy nie ma kary, tylko gra pokazuje obowiązkowy ruch na fundament i blokuje zagranie, które chciałeś wykonać."},
+ {HK_P,nullptr,L"W Ustawieniach (Rozgrywka) możesz zamiast „Karaj” wybrać „Przypomnij”: wtedy nie ma kary, tylko gra pokazuje obowiązkowy ruch na fundament i blokuje zagranie, które chciałeś wykonać. Dotyczy tylko gry z komputerem: w hot seat i przez sieć zawsze obowiązuje „Karaj”."},
 
  {HK_H,nullptr,L"Przebieg tury"},
  {HK_B,L"1.",L"Graj kartami z magazynu, śmietnika i kolumn, ile chcesz."},
@@ -1563,7 +1564,7 @@ static const HelpItem HELP_DOC[]={
  {HK_P,nullptr,L"Stan gry zapisuje się na bieżąco i wczytuje przy następnym uruchomieniu (również po awarii)."},
 
  {HK_H,nullptr,L"Komputer"},
- {HK_P,nullptr,L"Komputer ma trzy poziomy trudności: Łatwy, Normalny i Trudny (zmieniasz je w Ustawieniach). Gra według dziesięciu zasad opisanych w pliku AI_RULES.md."},
+ {HK_P,nullptr,L"Komputer ma trzy poziomy trudności: Łatwy, Normalny i Trudny (zmieniasz je w Ustawieniach). Różnią się wyłącznie tym, ile ruchów naprzód przewidują: 1, 2 i 4. Komputer zawsze zagrywa to, co uzna za najlepszą serię ruchów, i nie kończy tury, gdy jest wolna kolumna, w którą da się coś położyć. Gra według zasad opisanych w pliku AI_RULES.md."},
 };
 struct HelpBlock{ IDWriteTextLayout* lay=nullptr; int kind=0; float y=0,h=0; };
 static std::vector<HelpBlock> g_helpBlocks;
@@ -1800,14 +1801,17 @@ static void settingsDraw(){
    case 1:{                                                                  // Gameplay
       txt(L"Poziom gry (komputer)",cx,y,260,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
       uiButton(g_set.hits,cx+270,y,220,36,std::wstring(L"Poziom: ")+LEVEL_NAMES[g_level],SH_LEVEL,0);
-      y+=44; uiNote(L"Kliknij przycisk, żeby zmienić poziom. Łatwy i Normalny czasem pomijają dobry ruch, Trudny gra zawsze najlepiej, jak potrafi.",cx,y,cw,44); y+=62;
+      y+=44; uiNote(L"Kliknij przycisk, żeby zmienić poziom. Poziomy różnią się tym, ile ruchów naprzód komputer przewiduje: Łatwy 1, Normalny 2, Trudny 4. Żaden nie pomija ruchów.",cx,y,cw,44); y+=62;
       uiCheck(g_set.hits,cx,y,cw,L"Automatyczne ruchy",g_autoMoves,2); y+=34;
       uiNote(L"Kliknięcie karty przenosi ją na najlepsze miejsce (kliknięcie karty w kolumnie przenosi cały sekwens). Po wyłączeniu kartę można przenosić tylko przeciąganiem; kliknięcie własnej talii nadal dobiera kartę.",cx+32,y,cw-32,62); y+=80;
       txt(L"Przymus fundamentu",cx,y,260,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
-      uiButton(g_set.hits,cx+270,y,120,36,L"Karaj",SH_FORCE,0,g_forceMode==0);
-      uiButton(g_set.hits,cx+398,y,120,36,L"Przypomnij",SH_FORCE,1,g_forceMode==1);
+      const bool twoPlayers=g_hot||g_net.playing;                            // with another person the penalty always applies
+      uiButton(g_set.hits,cx+270,y,120,36,L"Karaj",SH_FORCE,0,effForce()==0);
+      uiButton(g_set.hits,cx+398,y,120,36,L"Przypomnij",SH_FORCE,1,effForce()==1,!twoPlayers);
       y+=44;
-      uiNote(g_forceMode==0
+      uiNote(twoPlayers
+         ? L"W grze z drugim graczem (hot seat, przez sieć) zawsze obowiązuje „Karaj”. Opcja „Przypomnij” działa tylko w grze z komputerem."
+         : g_forceMode==0
          ? L"Karaj: kto pominie ruch na fundament, natychmiast traci turę, a jego zagranie nie zostaje wykonane."
          : L"Przypomnij: zamiast kary gra pokazuje obowiązkowy ruch na fundament i blokuje zagranie, które chciałeś wykonać. Dopóki go nie zrobisz, nie zagrasz niczego innego.",cx,y,cw,62);
       break;}

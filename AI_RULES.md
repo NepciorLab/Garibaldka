@@ -69,9 +69,12 @@ The depth is the difference between the levels:
 
 | Level  | Moves looked ahead | Other |
 |--------|--------------------|-------|
-| Easy   | 1                  | still overlooks a move now and then |
-| Normal | 2                  | never overlooks a move |
-| Hard   | 4                  | never overlooks a move |
+| Easy   | 1                  | |
+| Normal | 2                  | |
+| Hard   | 4                  | |
+
+No level overlooks a move or chooses at random: the same position always gives the same move, and the levels differ
+only in how many moves they look ahead.
 
 A series is valued as the sum of its moves' values (`scoreMove`), later moves counting 10% less. A move worth nothing
 by itself is played when it opens a valuable one (10 of clubs onto the opponent's waste, then the lone 9 of clubs
