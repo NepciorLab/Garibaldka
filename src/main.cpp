@@ -1,4 +1,4 @@
-// Garibaldka (Russian Bank / crapette) for Windows - player vs computer.
+﻿// Garibaldka (Russian Bank / crapette) for Windows - player vs computer.
 // C++17 / Win32 / Direct2D + DirectWrite + WIC (graphics), DirectSound (audio).
 // Card images, sounds, renderer, fireworks and sound system come from the
 // "Pasjans Dziadkowy" project (MIT, see LICENSE).
@@ -27,6 +27,7 @@
 #include "sound.h"
 #include "update.h"
 #include "keys.h"
+#include "fluidflame.h"
 
 // ============================================================================
 // Globals
@@ -325,7 +326,10 @@ static DealAnim g_deal;
 // known and moves (ease in-out) to the other player's magazine when the turn changes.
 struct Flame{ bool lit=false; double igniteAt=0, last=0, t0=0, dur=0.65; int player=0; float scale=0, y=0, from=0, to=0; bool moving=false; };
 static Flame g_flame;
-static ID2D1Bitmap* g_flameSpr[8]={};      // soft round sprites, from white-hot yellow to red and to smoke
+static FluidFlame g_fire;                   // the flame: a small fluid simulation (see fluidflame.h)
+static std::vector<uint32_t> g_fireImg;
+static ID2D1Bitmap* g_fireBmp=nullptr;
+static double g_fireAcc=0;
 static std::wstring g_status; static bool g_statusErr=false; static double g_statusUntil=0;
 static double g_dealUntil=0, g_aiAt=0, g_fwLast=0, g_overAt=0;
 static bool   g_overShown=false, g_dirty=true;
@@ -674,7 +678,7 @@ static void newGameStart(bool network=false,uint32_t netSeed=0){
       g_dealUntil=g_start.t0+START_DUR+0.15;
    }
    g_start.active=true; g_start.cardId=g_game.startCardId;
-   g_flame=Flame(); g_flame.igniteAt=g_start.t0+START_DUR;     // the flame lights up when the winning card has landed
+   g_fire.clear(); g_flame=Flame(); g_flame.igniteAt=g_start.t0+START_DUR;     // the flame lights up when the winning card has landed
    snd("nowa");
    g_ctx=AIContext(); g_gameLevel=g_level;
    const bool me=g_game.turn==0;
@@ -698,7 +702,7 @@ static bool loadSavedGame(){
    for(Vis& v:V) v=Vis();
    relayout(true);
    g_dealUntil=0; g_ctx=AIContext();
-   g_flame=Flame(); g_flame.igniteAt=nowSec();
+   g_fire.clear(); g_flame=Flame(); g_flame.igniteAt=nowSec();
    if(g_game.turn==1) g_aiAt=nowSec()+0.8;
    setStatus(L"Wczytano ostatnią grę.",false,3.5);
    return true;
@@ -1117,7 +1121,7 @@ static bool ensureRT(){
    return true;
 }
 static void discardRT(){
-   for(auto& b:g_flameSpr) if(b){ b->Release(); b=nullptr; }
+   if(g_fireBmp){ g_fireBmp->Release(); g_fireBmp=nullptr; }
    g_ren.setRT(nullptr,nullptr); CardImagesD2D::instance().invalidate();
    if(g_rt){ g_rt->Release(); g_rt=nullptr; }
 }
@@ -1285,7 +1289,7 @@ static void drawFlame(double now){
    double dt=F.last>0?std::min(0.1,now-F.last):0.0; F.last=now;
    float target=(F.lit && !(g_game.over&&g_overShown))?1.f:0.f;          // goes out when the game is over
    F.scale+=(target-F.scale)*(float)(1.0-std::exp(-dt*(target>F.scale?4.5:7.0)));
-   if(F.scale<0.01f && target==0.f) return;
+   if(F.scale<0.01f && target==0.f && g_fire.j1<g_fire.j0) return;
    if(F.lit){
       if(!g_game.over && g_game.turn!=F.player){                          // the turn changed: the flame moves on
          F.from=F.y; F.to=flameCenterY(g_game.turn); F.t0=now; F.moving=true; F.player=g_game.turn;
@@ -1302,10 +1306,10 @@ static void drawFlame(double now){
    const float t=(float)now, fl=0.5f+0.5f*std::sin(t*13.f)*std::sin(t*7.3f+1.f);   // flicker 0..1
    const float a=std::min(1.f,F.scale*1.6f);
    auto P=[](float x,float y){ return D2D1::Point2F(x,y); };
-   // glow on the table around the fire
+   // soft glow on the table around the fire
    {
       ID2D1GradientStopCollection* st=nullptr; D2D1_GRADIENT_STOP gs[2];
-      gs[0].position=0.f; gs[0].color=D2D1::ColorF(1.f,0.55f,0.12f,(0.26f+0.12f*fl)*a);
+      gs[0].position=0.f; gs[0].color=D2D1::ColorF(1.f,0.55f,0.12f,(0.20f+0.10f*fl)*a);
       gs[1].position=1.f; gs[1].color=D2D1::ColorF(1.f,0.35f,0.05f,0.f);
       if(SUCCEEDED(g_rt->CreateGradientStopCollection(gs,2,&st))){
          ID2D1RadialGradientBrush* rb=nullptr;
@@ -1316,69 +1320,30 @@ static void drawFlame(double now){
          st->Release();
       }
    }
-   // The fire is a swarm of soft particles that rise, wander (turbulence), shrink, fade and cool down:
-   // white-hot yellow at the base, orange and red higher up, a little dark smoke above. Everything is a function
-   // of time, so nothing has to be stored between frames.
-   static const float SC[8][3]={{1.f,0.97f,0.78f},{1.f,0.86f,0.32f},{1.f,0.68f,0.10f},{1.f,0.50f,0.04f},
-                                {0.98f,0.34f,0.02f},{0.86f,0.20f,0.02f},{0.50f,0.09f,0.03f},{0.30f,0.28f,0.27f}};
-   if(!g_flameSpr[0]){
-      for(int i=0;i<8;i++){
-         ID2D1BitmapRenderTarget* brt=nullptr;
-         if(FAILED(g_rt->CreateCompatibleRenderTarget(D2D1::SizeF(64,64),&brt))) return;
-         brt->BeginDraw(); brt->Clear(D2D1::ColorF(0,0,0,0));
-         D2D1_GRADIENT_STOP gs[4];
-         gs[0].position=0.00f; gs[0].color=D2D1::ColorF(SC[i][0],SC[i][1],SC[i][2],1.00f);
-         gs[1].position=0.35f; gs[1].color=D2D1::ColorF(SC[i][0],SC[i][1],SC[i][2],0.55f);
-         gs[2].position=0.70f; gs[2].color=D2D1::ColorF(SC[i][0],SC[i][1],SC[i][2],0.16f);
-         gs[3].position=1.00f; gs[3].color=D2D1::ColorF(SC[i][0],SC[i][1],SC[i][2],0.00f);
-         ID2D1GradientStopCollection* st=nullptr; ID2D1RadialGradientBrush* rb=nullptr;
-         if(SUCCEEDED(brt->CreateGradientStopCollection(gs,4,&st))){
-            if(SUCCEEDED(brt->CreateRadialGradientBrush(D2D1::RadialGradientBrushProperties(P(32,32),P(0,0),32,32),st,&rb))){
-               brt->FillEllipse(D2D1::Ellipse(P(32,32),32,32),rb); rb->Release();
-            }
-            st->Release();
-         }
-         brt->EndDraw(); brt->GetBitmap(&g_flameSpr[i]); brt->Release();
-      }
+   // The fire: a fluid simulation in design pixels (a card is 130 high), drawn as a soft bitmap. The burner moves with
+   // the flame's turn marker; the burning gas stays where it was, so a moving flame leaves a curved trail that rises.
+   const float sc=std::max(0.4f,G.ch/130.f*1.0f);                       // design px -> screen px
+   static float kS=0,kH=0,kX=0;
+   if(!g_fire.ready()||std::fabs(kS-sc)>0.001f||std::fabs(kH-G.h)>0.5f||std::fabs(kX-cx)>0.5f){
+      kS=sc; kH=G.h; kX=cx; g_fire.init(140.f,G.h/sc,3.f);
+      g_fireImg.assign((size_t)g_fire.nx*g_fire.ny,0u);
+      if(g_fireBmp){ g_fireBmp->Release(); g_fireBmp=nullptr; }
    }
-   auto spr=[&](int stage,float x,float y,float r,float op){
-      if(r<0.5f||op<=0.f||!g_flameSpr[stage]) return;
-      g_rt->DrawBitmap(g_flameSpr[stage],D2D1::RectF(x-r,y-r,x+r,y+r),std::min(1.f,op),D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-   };
-   auto frac=[](float v){ return v-std::floor(v); };
-   auto hash=[&](int j,float k){ return frac(std::sin(j*12.9898f+k*78.233f)*43758.5453f); };
-   const float PI=3.14159265f;
-   float wind=std::sin(t*1.6f+0.7f)*0.16f+std::sin(t*3.1f)*0.05f;           // the whole fire sways a little
-   // smoke
-   for(int j=0;j<6;j++){
-      float age=frac(t*0.33f+j/6.f);
-      float x=cx+std::sin(t*0.9f+j*2.1f)*W*0.45f*age+wind*W*age*1.5f, y=by-H*(1.0f+age*0.75f);
-      spr(7,x,y,W*(0.45f+0.6f*age),0.13f*std::sin(PI*age)*a);
+   g_fireAcc=std::min(g_fireAcc+dt,0.1);
+   const float strength=F.lit?F.scale:0.f;
+   while(g_fireAcc>=1.0/60.0){
+      g_fire.step(1.f/60.f,70.f,by/sc,66.f*(0.55f+0.45f*F.scale),strength);
+      g_fireAcc-=1.0/60.0;
    }
-   // body of the fire: old (cool) particles first, young (hot) ones on top
-   struct Pt{ float age,x,y,r,op; int st; };
-   Pt pts[72]; int n=0; const int N=64;
-   for(int j=0;j<N;j++){
-      float age=frac(t*0.95f+(float)j/N+hash(j,1.f)*0.02f);
-      float spread=(hash(j,2.f)-0.5f)*W*0.70f*(1.f-age*0.86f);
-      float turb=std::sin(t*4.3f+j*2.3f+age*6.f)*W*0.20f*age+std::sin(t*9.7f+j*1.1f)*W*0.05f*age;
-      float life=std::sin(PI*std::min(1.f,age*1.1f));
-      pts[n++]={age, cx+spread+turb+wind*W*age*age*1.4f, by-H*1.02f*std::pow(age,0.82f),
-                W*(0.20f+0.30f*life)*(1.f-age*0.45f)+1.f,
-                0.80f*std::min(1.f,age*7.f)*std::pow(1.f-age,0.8f)*(0.9f+0.1f*fl), 1+std::min(5,(int)(age*5.4f))};
+   g_fire.render(g_fireImg.data());
+   if(!g_fireBmp){
+      D2D1_BITMAP_PROPERTIES bp=D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED));
+      g_rt->CreateBitmap(D2D1::SizeU((UINT32)g_fire.nx,(UINT32)g_fire.ny),nullptr,0,bp,&g_fireBmp);
    }
-   std::sort(pts,pts+n,[](const Pt& p,const Pt& q){ return p.age>q.age; });
-   for(int i=0;i<n;i++) spr(pts[i].st,pts[i].x,pts[i].y,pts[i].r,pts[i].op*a);
-   // white-hot core at the base
-   spr(2,cx,by-H*0.14f,W*0.46f,0.70f*a);
-   spr(1,cx+std::sin(t*9.f)*W*0.03f,by-H*0.12f,W*0.30f,0.85f*a);
-   spr(0,cx,by-H*0.10f,W*0.16f,0.90f*a);
-   // sparks
-   for(int j=0;j<6;j++){
-      float age=frac(t*0.55f+j*0.17f);
-      float ex=cx+std::sin(j*2.7f+t*2.3f)*W*(0.2f+0.4f*age)+wind*W*age, ey=by-H*(0.25f+1.05f*age), er=(1.f-age)*2.1f+0.5f;
-      ID2D1SolidColorBrush* eb=nullptr;
-      if(SUCCEEDED(g_rt->CreateSolidColorBrush(D2D1::ColorF(1.f,0.80f-0.45f*age,0.18f,(1.f-age)*0.9f*a),&eb))){ g_rt->FillEllipse(D2D1::Ellipse(P(ex,ey),er,er),eb); eb->Release(); }
+   if(g_fireBmp){
+      g_fireBmp->CopyFromMemory(nullptr,g_fireImg.data(),(UINT32)g_fire.nx*4);
+      const float ox=cx-70.f*sc;
+      g_rt->DrawBitmap(g_fireBmp,D2D1::RectF(ox,0.f,ox+g_fire.nx*g_fire.h*sc,g_fire.ny*g_fire.h*sc),1.f,D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
    }
 }
 
