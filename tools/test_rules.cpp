@@ -83,6 +83,42 @@ int main(){
       }
       CHECK(both==200,lvl==1?"Normal plays both magazine cards (5 clubs, then 6 clubs) every time":"Hard plays both magazine cards every time");
    }
+   // --- 2d. The screenshot position (computer on Hard): 6 clubs from the magazine onto the 7 of diamonds (taking it
+   //         off the column frees nothing, so the cover rule must not apply), then the 10 and the lone 9 of clubs
+   //         onto the player's waste, which empties a column.
+   {
+      int did6=0, did10=0, did9=0, N=200, level=2;
+      for(int i=0;i<N;i++){
+         Game g; for(auto& p:g.pile) p.clear(); g.turn=1; g.rng.seed(500+i);
+         g.pile[resId(1)]={mk(Clubs,6,1,true),mk(Clubs,5,0,true),mk(Clubs,6,0,true)};            // computer's magazine, top 6 clubs
+         g.pile[wasteId(0)]={mk(Spades,11,0),mk(Diamonds,13,0),mk(Clubs,9,0)};                   // the player's waste, top 9 clubs
+         g.pile[wasteId(1)]={mk(Spades,11,1)};
+         g.pile[tabId(0)]={mk(Clubs,12,0),mk(Hearts,11,0)};
+         g.pile[tabId(1)]={mk(Diamonds,13,0),mk(Clubs,12,1),mk(Hearts,11,1),mk(Clubs,10,0)};
+         g.pile[tabId(2)]={mk(Diamonds,3,0)};
+         g.pile[tabId(3)]={mk(Spades,8,0),mk(Diamonds,7,0)};
+         g.pile[tabId(4)]={mk(Clubs,3,0),mk(Diamonds,2,0)};
+         g.pile[tabId(5)]={mk(Clubs,9,1)};
+         g.pile[tabId(6)]={mk(Clubs,13,0)};
+         g.pile[tabId(7)]={mk(Diamonds,8,0),mk(Spades,7,0),mk(Diamonds,6,0),mk(Clubs,5,1)};
+         g.pile[handId(1)]={mk(Hearts,2,1,false)}; g.pile[handId(0)]={mk(Hearts,3,0,false)};
+         AIContext ctx; bool a=false,b=false,c=false;
+         for(int s=0;s<8&&g.turn==1;s++){
+            Move m; Step st; int srcCard=-1;
+            st=aiStep(g,1,ctx,level);
+            if(st.kind!=ST_MOVE) break;
+            // identify by destination (after the move the card is on top there)
+            const Card* t=g.top(st.m.dst);
+            if(t&&t->suit==Clubs&&t->rank==6&&st.m.dst==tabId(3)) a=true;
+            if(t&&t->suit==Clubs&&t->rank==10&&st.m.dst==wasteId(0)) b=true;
+            if(t&&t->suit==Clubs&&t->rank==9&&st.m.dst==wasteId(0)) c=true;
+         }
+         did6+=a; did10+=b; did9+=c;
+      }
+
+      CHECK(did6==N,"Hard: 6 clubs from the magazine onto the 7 of diamonds (nothing to cover)");
+      CHECK(did10==N&&did9==N,"Hard: 10 and 9 of clubs onto the player's waste to free a column");
+   }
    // --- 3. Obligation: a turned ace is always played on the foundation (every level).
    for(int lvl=0;lvl<3;lvl++){
       Game g=empty();

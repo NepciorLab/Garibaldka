@@ -395,7 +395,9 @@ inline float scoreMove(const Game& g,const Move& m,int p,const AIContext& ctx,in
    // (judged only when T is already face up, no peeking). If the opponent can put a card of his on T
    // at once (same suit, rank +-1; e.g. my queen leaves for the free column and he puts it back on my
    // king) AND I cannot play T away myself right now, then the position just returns to where it was
-   // and I have only used up my free place and my turn: the move is rejected.
+   // and I have only used up my free place and my turn: the move is rejected. Only a card that is ALONE in its
+   // column counts: taking it away would free a column for him. A card from the middle of a column (7 of diamonds
+   // stays under the 6 of clubs) frees nothing, so such a move is fine.
    if((st==PT_RES||st==PT_WASTE) && dt!=PT_FND){
       const auto& pl=g.pile[m.src];
       if(pl.size()>1 && pl[pl.size()-2].up){
@@ -407,8 +409,10 @@ inline float scoreMove(const Game& g,const Move& m,int p,const AIContext& ctx,in
          if(!playable){
             auto touches=[&](const Card* x){ return x && x->suit==T.suit && std::abs(x->rank-T.rank)==1; };
             bool covered=false;                                    // cards the opponent could use, after my move
-            for(int j=0;j<NUM_TAB&&!covered;j++){ int id=tabId(j); covered=touches(id==m.dst?&c:g.top(id)); }
-            for(int k=0;k<2&&!covered;k++) covered=touches(qs[k]==m.dst?&c:g.top(qs[k]));
+            for(int j=0;j<NUM_TAB&&!covered;j++){
+               int id=tabId(j); int n=(int)g.pile[id].size()+(id==m.dst?1:0);       // how many cards the column holds after my move
+               if(n==1) covered=touches(id==m.dst?&c:g.top(id));
+            }
             if(covered) return REJECTED;
          }
       }
@@ -472,12 +476,27 @@ inline float moveNoise(int level,std::mt19937& rng){
    return (float)(rng()%1000)/1000.f*(level<=1?60.f:3.f);
 }
 
+// A move onto the opponent's waste or magazine is worth little by itself, but it may open the next move: a card of the
+// same suit one rank lower/higher now fits on it, and that can empty a column (10 of clubs onto his waste, then the
+// lone 9 of clubs after it). Value of such a "set-up" move = a share of the best follow-up move's value.
+inline float setupValue(const Game& g,const Move& m,int p,const AIContext& ctx,int level){
+   Game g2=g; const int moved=g.srcTop(m.src,p)->id; g2.doMove(m.src,m.dst,p);
+   AIContext c2=ctx; float best=0.f;
+   for(const Move& m2:legalMoves(g2,p)){
+      const Card* c=g2.srcTop(m2.src,p); if(!c||c->id==moved) continue;
+      if(ptype(m2.dst)==PT_FND) continue;                                    // (the obligation is handled elsewhere)
+      best=std::max(best,scoreMove(g2,m2,p,c2,level));
+   }
+   return best>=50.f ? 15.f+0.5f*best : 0.f;
+}
+
 inline bool aiChoose(const Game& g,int p,const AIContext& ctx,int level,std::mt19937& rng,Move& out){
    // Obligation (rule 1): any card that fits a foundation goes there first (strict obligation).
    if(g.mandatory(p,out)) return true;
    float best=0; bool found=false;
    for(const Move& m:legalMoves(g,p)){
       float base=scoreMove(g,m,p,ctx,level);
+      if(base<=0 && level>=1 && (m.dst==resId(1-p)||m.dst==wasteId(1-p)) && ptype(m.src)==PT_TAB) base=setupValue(g,m,p,ctx,level);
       if(base<=0) continue;                       // pointless move: never played
       float sc=base+moveNoise(level,rng);
       if(sc>best){ best=sc; out=m; found=true; }
