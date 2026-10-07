@@ -16,3 +16,6 @@ SND_4 RCDATA "sounds/nono.wav"
 SND_5 RCDATA "sounds/Podpowiedz.wav"
 SND_6 RCDATA "sounds/cofnij.wav"
 SND_7 RCDATA "sounds/plomien.wav"
+
+// Translations (gettext .po; the source language is Polish)
+LANG_EN RCDATA "lang/en.po"

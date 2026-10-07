@@ -27,6 +27,7 @@
 #include "sound.h"
 #include "update.h"
 #include "keys.h"
+#include "i18n.h"
 #include "fluidflame.h"
 #include "fireworks2.h"
 
@@ -56,7 +57,7 @@ static bool  g_autoMoves=true;     // a click on a card moves it to its best pla
 static int   g_forceMode=0;        // foundation obligation: 0 = punish (the turn is lost), 1 = remind (the other action is blocked)
 static int   g_setGroup=0;         // the group last selected in the settings window
 static int   actor(){ return g_hot?g_game.turn:0; }       // the player at the controls
-static std::wstring hotName(int p){ return p==0?L"Gracz 1":L"Gracz 2"; }
+static std::wstring hotName(int p){ return p==0?T(L"Gracz 1"):T(L"Gracz 2"); }
 // Version of this build. A release on GitHub is tagged vMAJOR.MINOR.PATCH with the same number and carries
 // an asset called Garibaldi.exe: the updater (update.h) compares the tag with this number.
 static const wchar_t* APP_VERSION = L"1.2.2";
@@ -68,7 +69,7 @@ static bool  g_checkUpdates=true;     // check GitHub for a newer release at sta
 static std::wstring buildDateText(){   // "5 października 2026", from the compiler's __DATE__
    const char* d=__DATE__;
    static const char* M="JanFebMarAprMayJunJulAugSepOctNovDec";
-   static const wchar_t* PL[12]={L"stycznia",L"lutego",L"marca",L"kwietnia",L"maja",L"czerwca",L"lipca",L"sierpnia",L"września",L"października",L"listopada",L"grudnia"};
+   const wchar_t* PL[12]={T(L"stycznia"),T(L"lutego"),T(L"marca"),T(L"kwietnia"),T(L"maja"),T(L"czerwca"),T(L"lipca"),T(L"sierpnia"),T(L"września"),T(L"października"),T(L"listopada"),T(L"grudnia")};
    int mon=0; for(int i=0;i<12;i++) if(strncmp(d,M+i*3,3)==0){ mon=i; break; }
    return std::to_wstring(atoi(d+4))+L" "+PL[mon]+L" "+std::to_wstring(atoi(d+7));
 }
@@ -103,8 +104,9 @@ static const wchar_t* DEFAULT_INVITE=L"uppbskah";
 static std::wstring g_serverW, g_inviteW, g_codeW;
 static std::string g_secret;                         // the player's secret key: it proves that a nick is his (kept in the .ini)
 static std::wstring g_nickW=L"Gracz", g_ipW;
-static std::wstring oppName(){ return g_net.playing ? g_net.peerNick : std::wstring(L"Komputer"); }
-static const wchar_t* LEVEL_NAMES[]={L"Łatwy",L"Normalny",L"Trudny"};
+static std::wstring oppName(){ return g_net.playing ? g_net.peerNick : std::wstring(T(L"Komputer")); }
+static const wchar_t* LEVEL_NAMES[]={L"Łatwy",L"Normalny",L"Trudny"};            // (Polish msgids; use levelName())
+static const wchar_t* levelName(int i){ return T(LEVEL_NAMES[i]); }
 static const float TB=58.f, SB=28.f;     // toolbar / status bar heights
 
 // ---------------------------------------------------------------------------
@@ -424,13 +426,13 @@ static void statusForTurn(){
    if(g_game.over) return;
    if(g_hot){
       std::wstring w=hotName(g_game.turn)+L": ";
-      if(!g_game.pile[turnedId(g_game.turn)].empty()) setStatus(w+L"zagraj dobraną kartę albo odrzuć ją na śmietnik (kończy turę).");
-      else setStatus(w+L"zagraj karty lub dobierz z talii.");
+      if(!g_game.pile[turnedId(g_game.turn)].empty()) setStatus(w+T(L"zagraj dobraną kartę albo odrzuć ją na śmietnik (kończy turę)."));
+      else setStatus(w+T(L"zagraj karty lub dobierz z talii."));
       return;
    }
-   if(g_game.turn==1){ setStatus(oppName()+L" gra…"); return; }
-   if(!g_game.pile[turnedId(0)].empty()) setStatus(L"Zagraj dobraną kartę albo odrzuć ją na śmietnik (kończy turę).");
-   else setStatus(L"Twój ruch: zagraj karty lub dobierz z talii.");
+   if(g_game.turn==1){ setStatus(oppName()+T(L" gra…")); return; }
+   if(!g_game.pile[turnedId(0)].empty()) setStatus(T(L"Zagraj dobraną kartę albo odrzuć ją na śmietnik (kończy turę)."));
+   else setStatus(T(L"Twój ruch: zagraj karty lub dobierz z talii."));
 }
 
 static std::wstring iniPath(){
@@ -470,6 +472,7 @@ static void saveSettings(){
    WritePrivateProfileStringW(L"Network",L"Server",g_serverW.c_str(),ini.c_str());
    WritePrivateProfileStringW(L"Network",L"Invite",g_inviteW.c_str(),ini.c_str());
    WritePrivateProfileStringW(L"Network",L"Secret",net::fromUtf8(g_secret).c_str(),ini.c_str());
+   WritePrivateProfileStringW(L"Settings",L"Language",i18n::code().c_str(),ini.c_str());
    wsprintfW(b,L"%d",g_autoMoves?1:0); WritePrivateProfileStringW(L"Settings",L"AutoMoves",b,ini.c_str());
    wsprintfW(b,L"%d",g_forceMode);     WritePrivateProfileStringW(L"Settings",L"ForceObligation",b,ini.c_str());
    wsprintfW(b,L"%d",g_setGroup);      WritePrivateProfileStringW(L"Settings",L"LastGroup",b,ini.c_str());
@@ -492,6 +495,8 @@ static void loadSettings(){
    g_muted=GetPrivateProfileIntW(L"Settings",L"Muted",0,ini.c_str())!=0;
    g_volPct=(int)GetPrivateProfileIntW(L"Settings",L"Volume",100,ini.c_str()); g_volPct=std::max(0,std::min(100,g_volPct));
    g_checkUpdates=GetPrivateProfileIntW(L"Settings",L"CheckUpdatesOnStart",1,ini.c_str())!=0;
+   { wchar_t lb[16]={}; GetPrivateProfileStringW(L"Settings",L"Language",L"",lb,16,ini.c_str());
+     if(!i18n::setLanguage(lb)) i18n::setLanguage(i18n::systemLanguageCode()); }         // none saved yet: the language of the system
    g_autoMoves=GetPrivateProfileIntW(L"Settings",L"AutoMoves",1,ini.c_str())!=0;
    g_forceMode=GetPrivateProfileIntW(L"Settings",L"ForceObligation",0,ini.c_str())==1?1:0;
    g_setGroup=(int)GetPrivateProfileIntW(L"Settings",L"LastGroup",0,ini.c_str()); if(g_setGroup<0||g_setGroup>4) g_setGroup=0;
@@ -542,13 +547,13 @@ static void onGameOver(){
       saveSettings();
    }
    if(g_hot && g_game.winner>=0){ snd("sukces"); g_fw.start((int)G.w,(int)G.h); g_fwLast=nowSec();
-      setStatus(hotName(g_game.winner)+(all?L" wygrywa: pozbył się wszystkich kart!":L" wygrywa: po 400 turach ma mniej kart do zagrania."));
+      setStatus(hotName(g_game.winner)+(all?T(L" wygrywa: pozbył się wszystkich kart!"):T(L" wygrywa: po 400 turach ma mniej kart do zagrania.")));
    }
    else if(g_game.winner==0){ snd("sukces"); g_fw.start((int)G.w,(int)G.h); g_fwLast=nowSec();
-      setStatus(all?L"Wygrywasz! Pozbyłeś się wszystkich kart.":L"Wygrywasz! Po 400 turach masz mniej kart do zagrania."); }
+      setStatus(all?T(L"Wygrywasz! Pozbyłeś się wszystkich kart."):T(L"Wygrywasz! Po 400 turach masz mniej kart do zagrania.")); }
    else if(g_game.winner==1){ snd("koniec");
-      setStatus(all?oppName()+L" pozbył się wszystkich kart. Przegrana.":L"Po 400 turach "+oppName()+L" ma mniej kart do zagrania. Przegrana."); }
-   else { snd("koniec"); setStatus(L"Remis: nikt nie może już zagrać."); }
+      setStatus(all?oppName()+T(L" pozbył się wszystkich kart. Przegrana."):T(L"Po 400 turach ")+oppName()+T(L" ma mniej kart do zagrania. Przegrana.")); }
+   else { snd("koniec"); setStatus(T(L"Remis: nikt nie może już zagrać.")); }
    netReportResult(); recGameEnd();
    g_dirty=true;
 }
@@ -690,15 +695,15 @@ static void newGameStart(bool network=false,uint32_t netSeed=0){
    const bool me=g_game.turn==0;
    switch(g_game.startHow){
    case Game::SH_MAG_SUIT:
-      setStatus(me?std::wstring(L"Takie same figury w magazynach: zaczynasz, bo Twój kolor jest starszy (pik, kier, karo, trefl).")
-                  :std::wstring(L"Takie same figury w magazynach: ")+oppName()+L" zaczyna, bo jego kolor jest starszy (pik, kier, karo, trefl)."); break;
+      setStatus(me?std::wstring(T(L"Takie same figury w magazynach: zaczynasz, bo Twój kolor jest starszy (pik, kier, karo, trefl)."))
+                  :std::wstring(T(L"Takie same figury w magazynach: "))+oppName()+T(L" zaczyna, bo jego kolor jest starszy (pik, kier, karo, trefl).")); break;
    case Game::SH_HAND_RANK: case Game::SH_HAND_SUIT:
-      setStatus(me?std::wstring(L"Identyczne karty w magazynach: rozstrzygnęły karty odkryte z talii. Zaczynasz.")
-                  :std::wstring(L"Identyczne karty w magazynach: rozstrzygnęły karty odkryte z talii. Zaczyna ")+oppName()+L"."); break;
+      setStatus(me?std::wstring(T(L"Identyczne karty w magazynach: rozstrzygnęły karty odkryte z talii. Zaczynasz."))
+                  :std::wstring(T(L"Identyczne karty w magazynach: rozstrzygnęły karty odkryte z talii. Zaczyna "))+oppName()+L"."); break;
    default:
-      setStatus(me?std::wstring(L"Zaczynasz: masz starszą kartę w magazynie."):oppName()+L" zaczyna: ma starszą kartę w magazynie.");
+      setStatus(me?std::wstring(T(L"Zaczynasz: masz starszą kartę w magazynie.")):oppName()+T(L" zaczyna: ma starszą kartę w magazynie."));
    }
-   if(g_hot) setStatus(hotName(g_game.turn)+L" zaczyna (starsza karta w magazynie albo rozstrzygnięcie według zasad).");
+   if(g_hot) setStatus(hotName(g_game.turn)+T(L" zaczyna (starsza karta w magazynie albo rozstrzygnięcie według zasad)."));
    if(!me) g_aiAt=g_dealUntil+0.4;
 }
 // Restores the game saved on exit. Returns false when there is no valid save.
@@ -710,7 +715,7 @@ static bool loadSavedGame(){
    g_dealUntil=0; g_ctx=AIContext();
    g_fire.clear(); g_flame=Flame(); g_flame.igniteAt=nowSec();
    if(g_game.turn==1) g_aiAt=nowSec()+0.8;
-   setStatus(L"Wczytano ostatnią grę.",false,3.5);
+   setStatus(T(L"Wczytano ostatnią grę."),false,3.5);
    return true;
 }
 
@@ -759,7 +764,7 @@ static void netLeave(const wchar_t* message){
    bool wasPlaying=g_net.playing;
    netReset(); g_np.info=message?message:L"";
    if(wasPlaying){
-      if(message) MessageBoxW(g_hwnd,message,L"Gra sieciowa",MB_OK|MB_ICONINFORMATION);
+      if(message) MessageBoxW(g_hwnd,message,T(L"Gra sieciowa"),MB_OK|MB_ICONINFORMATION);
       newGameStart();
    }
    g_dirty=true;
@@ -767,7 +772,7 @@ static void netLeave(const wchar_t* message){
 static void netDesync(const wchar_t* why){
    { std::string w=net::toUtf8(why); g_log+="DESYNC: "+w+"\n"; }
    netSend("BYE");
-   std::wstring m=std::wstring(L"Gra obu graczy rozeszła się (")+why+L"). Gra sieciowa została przerwana.";
+   std::wstring m=std::wstring(T(L"Gra obu graczy rozeszła się ("))+why+T(L"). Gra sieciowa została przerwana.");
    netLeave(m.c_str());
 }
 static void netHostStart(){
@@ -775,17 +780,17 @@ static void netHostStart(){
    g_net=NetState(); g_net.host=true; g_myAddrs=net::localAddresses();
    std::string err;
    if(g_conn.listenOn(g_hwnd,net::DEFAULT_PORT,err)){ g_net.listening=true; g_np.info.clear(); }
-   else { g_net.host=false; g_np.info=L"Nie można nasłuchiwać: "+net::fromUtf8(err); }
+   else { g_net.host=false; g_np.info=T(L"Nie można nasłuchiwać: ")+net::fromUtf8(err); }
    g_dirty=true;
 }
 static void netJoinStart(){
    if(netBusy()) return;
    std::string ip;                                      // only characters that can be in an address (no quotes, spaces...)
    for(wchar_t ch:g_ipW) if((ch>=L'0'&&ch<=L'9')||ch==L'.'||ch==L'-'||(ch>=L'a'&&ch<=L'z')||(ch>=L'A'&&ch<=L'Z')) ip.push_back((char)ch);
-   if(ip.empty()){ g_np.info=L"Wpisz adres IP hosta."; g_dirty=true; return; }
+   if(ip.empty()){ g_np.info=T(L"Wpisz adres IP hosta."); g_dirty=true; return; }
    g_net=NetState(); g_net.host=false;
    if(g_conn.connectTo(g_hwnd,ip,net::DEFAULT_PORT)){ g_net.connecting=true; g_np.info.clear(); }
-   else g_np.info=L"Nie można rozpocząć łączenia.";
+   else g_np.info=T(L"Nie można rozpocząć łączenia.");
    g_dirty=true;
 }
 static void netDisconnect(){
@@ -803,7 +808,7 @@ static void netHostBegin(){                                 // the host picks th
 static void netRematchRequest(){
    if(!g_net.playing) return;
    g_net.rematchAsked=true; netSend("REMATCH");
-   setStatus(L"Czekam, aż "+g_net.peerNick+L" zgodzi się na nową partię…");
+   setStatus(T(L"Czekam, aż ")+g_net.peerNick+T(L" zgodzi się na nową partię…"));
 }
 // ---------------------------------------------------------------------------
 // Online (through the server): log in with the nick + the secret key, open or join a room with a 4-letter code.
@@ -812,17 +817,17 @@ static void netRematchRequest(){
 static void netOnlineStart(bool create){
    if(netBusy()) return;
    std::wstring nick=g_nickW; for(auto& ch:nick) if(ch==L' ') ch=L'_';
-   if(nick.size()<3){ g_np.info=L"Nick musi mieć co najmniej 3 znaki."; g_dirty=true; return; }
+   if(nick.size()<3){ g_np.info=T(L"Nick musi mieć co najmniej 3 znaki."); g_dirty=true; return; }
    std::string server;
    for(wchar_t ch:g_serverW) if(ch>32&&ch<127) server.push_back((char)ch);
-   if(server.empty()){ g_np.info=L"Wpisz adres serwera."; g_dirty=true; return; }
+   if(server.empty()){ g_np.info=T(L"Wpisz adres serwera."); g_dirty=true; return; }
    std::string code; for(wchar_t ch:g_codeW) if(iswalnum(ch)&&ch<128) code.push_back((char)towupper(ch));
-   if(!create&&code.size()!=4){ g_np.info=L"Kod pokoju ma 4 znaki."; g_dirty=true; return; }
+   if(!create&&code.size()!=4){ g_np.info=T(L"Kod pokoju ma 4 znaki."); g_dirty=true; return; }
    g_nickW=nick;
    g_net=NetState(); g_net.online=true; g_net.pendingCreate=create; g_net.pendingCode=code;
    g_link=&g_ws;
    if(g_ws.connectTo(g_hwnd,server)){ g_net.connecting=true; g_np.info.clear(); }
-   else { g_net=NetState(); g_link=&g_conn; g_np.info=L"Nie można rozpocząć łączenia."; }
+   else { g_net=NetState(); g_link=&g_conn; g_np.info=T(L"Nie można rozpocząć łączenia."); }
    g_dirty=true;
 }
 static void netServerLine(const std::string& l){
@@ -836,22 +841,22 @@ static void netServerLine(const std::string& l){
       serverSend(g_net.pendingCreate?std::string("#CREATE"):"#JOIN "+g_net.pendingCode);
    } else if(cmd=="#ERR"){
       std::string text; for(size_t i=2;i<t.size();i++){ if(i>2) text+=' '; text+=t[i]; }
-      std::wstring m=net::fromUtf8(text); netReset(); g_np.info=m; g_np.open=true;
+      std::wstring m=i18n::Tw(net::fromUtf8(text)); netReset(); g_np.info=m; g_np.open=true;
    } else if(cmd=="#ROOM"){
       g_net.roomCode=t.size()>1?t[1]:""; g_net.connecting=false; g_net.listening=true; g_np.info.clear();
    } else if(cmd=="#PAIRED"){
       g_net.host=(t.size()>2&&t[2]=="host"); g_net.peerNick=net::fromUtf8(t.size()>1?t[1]:"");
       g_net.connecting=false; g_net.listening=false; g_net.connected=true;
-      g_np.info=L"Połączono z "+g_net.peerNick+L". Uzgadnianie…";
+      g_np.info=T(L"Połączono z ")+g_net.peerNick+T(L". Uzgadnianie…");
       netSend("HELLO "+net::toUtf8(APP_VERSION)+" "+net::toUtf8(g_nickW));
    } else if(cmd=="#H2H"){
       g_net.h2hW=num(1); g_net.h2hL=num(2); g_net.h2hD=num(3); g_net.hasH2h=true;
    } else if(cmd=="#STATS"){
-      setStatus(L"Wynik zapisany. Twój bilans na serwerze: "+std::to_wstring(num(1))+L" wygranych, "+std::to_wstring(num(2))+L" przegranych, "+std::to_wstring(num(3))+L" remisów.",false,8);
+      setStatus(T(L"Wynik zapisany. Twój bilans na serwerze: ")+std::to_wstring(num(1))+T(L" wygranych, ")+std::to_wstring(num(2))+T(L" przegranych, ")+std::to_wstring(num(3))+T(L" remisów."),false,8);
    } else if(cmd=="#PEERLEFT"){
-      if(g_net.playing||g_net.connected) netLeave((g_net.peerNick+L" opuścił grę.").c_str());
+      if(g_net.playing||g_net.connected) netLeave((g_net.peerNick+T(L" opuścił grę.")).c_str());
    } else if(cmd=="#KICK"){
-      netLeave(L"Ten nick zalogował się z innego miejsca.");
+      netLeave(T(L"Ten nick zalogował się z innego miejsca."));
    }
 }
 static void chatAdd(const std::wstring& who,const std::wstring& text,bool mine){
@@ -868,16 +873,16 @@ static void netLine(const std::string& l){
    if(cmd=="HELLO"){
       size_t sp=rest.find(' ');
       g_net.peerVer=rest.substr(0,sp); g_net.peerNick=net::fromUtf8(sp==std::string::npos?"":rest.substr(sp+1));
-      if(g_net.peerNick.empty()) g_net.peerNick=L"Przeciwnik";
+      if(g_net.peerNick.empty()) g_net.peerNick=T(L"Przeciwnik");
       if(g_net.peerVer!=net::toUtf8(APP_VERSION)){
          netSend("BYE");
-         std::wstring m=L"Różne wersje gry: Ty masz "+std::wstring(APP_VERSION)+L", "+g_net.peerNick+L" ma "+net::fromUtf8(g_net.peerVer)+L".\nZaktualizujcie obie strony do tej samej wersji.";
+         std::wstring m=T(L"Różne wersje gry: Ty masz ")+std::wstring(APP_VERSION)+L", "+g_net.peerNick+T(L" ma ")+net::fromUtf8(g_net.peerVer)+T(L".\nZaktualizujcie obie strony do tej samej wersji.");
          netReset(); g_np.info=m; g_dirty=true;
-         MessageBoxW(g_hwnd,m.c_str(),L"Gra sieciowa",MB_OK|MB_ICONWARNING);
+         MessageBoxW(g_hwnd,m.c_str(),T(L"Gra sieciowa"),MB_OK|MB_ICONWARNING);
          return;
       }
       if(g_net.host) netHostBegin();
-      else { g_np.info=L"Połączono z "+g_net.peerNick+L". Czekam na rozpoczęcie gry…"; g_dirty=true; }
+      else { g_np.info=T(L"Połączono z ")+g_net.peerNick+T(L". Czekam na rozpoczęcie gry…"); g_dirty=true; }
    }
    else if(cmd=="START"){ if(!g_net.host) startNetGame((uint32_t)strtoul(rest.c_str(),nullptr,10)); }
    else if(cmd=="CHAT"){ chatAdd(g_net.peerNick,net::fromUtf8(rest),false); }
@@ -886,34 +891,34 @@ static void netLine(const std::string& l){
       if(!g_net.playing) return;
       if(g_net.rematchAsked){ if(g_net.host) netHostBegin(); }                 // both asked: the host starts
       else {
-         std::wstring m=g_net.peerNick+L" proponuje nową partię. Zgadzasz się?";
-         if(MessageBoxW(g_hwnd,m.c_str(),L"Nowa partia",MB_YESNO|MB_ICONQUESTION)==IDYES){
+         std::wstring m=g_net.peerNick+T(L" proponuje nową partię. Zgadzasz się?");
+         if(MessageBoxW(g_hwnd,m.c_str(),T(L"Nowa partia"),MB_YESNO|MB_ICONQUESTION)==IDYES){
             if(g_net.host) netHostBegin(); else netSend("REMATCH_OK");
          } else netSend("REMATCH_NO");
       }
    }
    else if(cmd=="REMATCH_OK"){ if(g_net.host&&g_net.rematchAsked) netHostBegin(); }
-   else if(cmd=="REMATCH_NO"){ g_net.rematchAsked=false; setStatus(g_net.peerNick+L" nie chce nowej partii.",true,4); }
-   else if(cmd=="BYE"){ netLeave((g_net.peerNick+L" opuścił grę.").c_str()); }
+   else if(cmd=="REMATCH_NO"){ g_net.rematchAsked=false; setStatus(g_net.peerNick+T(L" nie chce nowej partii."),true,4); }
+   else if(cmd=="BYE"){ netLeave((g_net.peerNick+T(L" opuścił grę.")).c_str()); }
    else if(cmd=="M"||cmd=="D"||cmd=="X"||cmd=="P"||cmd=="F"){ g_net.inbox.push_back(l); }
 }
 static void netEvent(int ev,const std::string& s){
    switch(ev){
    case net::EV_CONNECTED:
       if(g_net.online){                                  // connected to the server: log in first
-         g_np.info=L"Połączono z serwerem. Logowanie…";
+         g_np.info=T(L"Połączono z serwerem. Logowanie…");
          serverSend("#AUTH "+net::toUtf8(APP_VERSION)+" "+net::toUtf8(g_nickW)+" "+g_secret+(g_inviteW.empty()?std::string():" "+net::toUtf8(g_inviteW)));
          break;
       }
       g_net.listening=false; g_net.connecting=false; g_net.connected=true;
-      g_np.info=L"Połączono. Uzgadnianie…"; netSend("HELLO "+net::toUtf8(APP_VERSION)+" "+net::toUtf8(g_nickW));
+      g_np.info=T(L"Połączono. Uzgadnianie…"); netSend("HELLO "+net::toUtf8(APP_VERSION)+" "+net::toUtf8(g_nickW));
       break;
    case net::EV_FAILED:
       { bool wasOnline=g_net.online; netReset();
-        g_np.info=(wasOnline?L"Nie udało się połączyć z serwerem: ":L"Nie udało się połączyć: ")+net::fromUtf8(s); } break;
+        g_np.info=(wasOnline?T(L"Nie udało się połączyć z serwerem: "):T(L"Nie udało się połączyć: "))+net::fromUtf8(s); } break;
    case net::EV_CLOSED:
-      if(g_net.playing) netLeave(L"Połączenie z przeciwnikiem zostało przerwane.");
-      else if(g_net.connected||g_net.online){ bool wasOnline=g_net.online; netReset(); g_np.info=wasOnline?L"Połączenie z serwerem zostało zamknięte.":L"Połączenie zostało zamknięte."; }
+      if(g_net.playing) netLeave(T(L"Połączenie z przeciwnikiem zostało przerwane."));
+      else if(g_net.connected||g_net.online){ bool wasOnline=g_net.online; netReset(); g_np.info=wasOnline?T(L"Połączenie z serwerem zostało zamknięte."):T(L"Połączenie zostało zamknięte."); }
       break;
    case net::EV_LINE: if(g_net.online&&!s.empty()&&s[0]=='#') netServerLine(s); else netLine(s); break;
    }
@@ -922,27 +927,27 @@ static void netEvent(int ev,const std::string& s){
 // Plays one action of the opponent (checked with the same rules - a wrong action means the games diverged).
 static void netApply(const std::string& l){
    char c=l[0];
-   if(g_game.turn!=1){ netDesync(L"ruch przeciwnika nie w jego turze"); return; }
+   if(g_game.turn!=1){ netDesync(T(L"ruch przeciwnika nie w jego turze")); return; }
    const bool endsTurn=(c=='X'||c=='P'||c=='F');
    const uint64_t theirs=endsTurn?strtoull(l.c_str()+1,nullptr,16):0;
    if(c=='M'){
-      int a=-1,b=-1; if(sscanf(l.c_str()+1,"%d %d",&a,&b)!=2||a<0||a>=NP||b<0||b>=NP){ netDesync(L"błędny ruch"); return; }
+      int a=-1,b=-1; if(sscanf(l.c_str()+1,"%d %d",&a,&b)!=2||a<0||a>=NP||b<0||b>=NP){ netDesync(T(L"błędny ruch")); return; }
       int src=Game::mirrorPile(a), dst=Game::mirrorPile(b);
-      if(!g_game.canMove(src,dst,1)){ netDesync(L"niedozwolony ruch przeciwnika"); return; }
+      if(!g_game.canMove(src,dst,1)){ netDesync(T(L"niedozwolony ruch przeciwnika")); return; }
       recAction(g_game,'N',1,ST_MOVE,src,dst); g_game.doMove(src,dst,1); snd("click"); afterAnyMove();
    } else if(c=='D'){
-      if(!g_game.canDraw(1)){ netDesync(L"niedozwolone dobranie"); return; }
+      if(!g_game.canDraw(1)){ netDesync(T(L"niedozwolone dobranie")); return; }
       recAction(g_game,'N',1,ST_DRAW); g_game.draw(1); snd("click"); afterAnyMove();
    } else if(c=='X'){
-      if(g_game.pile[turnedId(1)].empty()){ netDesync(L"niedozwolone odrzucenie"); return; }
+      if(g_game.pile[turnedId(1)].empty()){ netDesync(T(L"niedozwolone odrzucenie")); return; }
       recAction(g_game,'N',1,ST_DISCARD); g_game.discard(1); snd("click"); afterAnyMove(); if(!g_game.over) statusForTurn();
    } else if(c=='P'){
       recAction(g_game,'N',1,ST_PASS); g_game.endTurn(); snd("click"); afterAnyMove(); if(!g_game.over) statusForTurn();
    } else if(c=='F'){
       g_game.endTurn(); snd("nono"); afterAnyMove();
-      if(!g_game.over){ statusForTurn(); setStatus(g_net.peerNick+L" zapomniał dołożyć karty do fundamentu i traci turę.",false,4); }
+      if(!g_game.over){ statusForTurn(); setStatus(g_net.peerNick+T(L" zapomniał dołożyć karty do fundamentu i traci turę."),false,4); }
    }
-   if(endsTurn && g_net.playing && theirs!=netStateHash()) netDesync(L"różne stany gry po turze");   // checked right away
+   if(endsTurn && g_net.playing && theirs!=netStateHash()) netDesync(T(L"różne stany gry po turze"));   // checked right away
 }
 static void netTick(double now){
    if(!g_net.playing) return;
@@ -987,15 +992,15 @@ static void loseTurnForForgetting(const Move& m){
    if(g_game.over){ onGameOver(); return; }
    endHumanTurnIfSwitched();
    snd("nono");
-   if(g_hot) setStatus(hotName(who)+L" zapomniał dołożyć karty do fundamentu: traci turę!",true,4);
-   else setStatus(L"Zapomniałeś dołożyć karty do fundamentu: tracisz turę!",true,4);
+   if(g_hot) setStatus(hotName(who)+T(L" zapomniał dołożyć karty do fundamentu: traci turę!"),true,4);
+   else setStatus(T(L"Zapomniałeś dołożyć karty do fundamentu: tracisz turę!"),true,4);
 }
 // The player tried something else while `must` still has to go to a foundation. Setting "Karaj": the turn is lost.
 // Setting "Przypomnij": nothing happens except that the forced move is shown, so the player has to make it.
 static void obligationBlocked(const Move& must){
    if(effForce()==1){
       startPreview(must); snd("nono"); relayout(); g_dirty=true;
-      setStatus(L"Przymus: ta karta musi najpierw trafić na fundament.",true,4);
+      setStatus(T(L"Przymus: ta karta musi najpierw trafić na fundament."),true,4);
       return;
    }
    loseTurnForForgetting(must);
@@ -1003,10 +1008,10 @@ static void obligationBlocked(const Move& must){
 static void humanDraw(){
    if(!humanTurn()) return;
    const int a=actor();
-   if(!g_game.pile[turnedId(a)].empty()){ snd("nono"); setStatus(L"Najpierw zagraj albo odrzuć dobraną kartę.",true,3); return; }
+   if(!g_game.pile[turnedId(a)].empty()){ snd("nono"); setStatus(T(L"Najpierw zagraj albo odrzuć dobraną kartę."),true,3); return; }
    Move m;
    if(g_game.mandatory(a,m)){ obligationBlocked(m); return; }
-   if(!g_game.canDraw(a)){ snd("nono"); setStatus(L"Talia i śmietnik są puste. Kliknij talię (lub naciśnij D), żeby spasować.",true,3); return; }
+   if(!g_game.canDraw(a)){ snd("nono"); setStatus(T(L"Talia i śmietnik są puste. Kliknij talię (lub naciśnij D), żeby spasować."),true,3); return; }
    pushUndo(); logf("humanDraw"); recAction(g_game,'H',a,ST_DRAW); g_game.draw(a); netLocal("D",false); snd("click"); afterAnyMove(); statusForTurn();
 }
 static void humanDiscard(){
@@ -1050,14 +1055,14 @@ static void doHint(){
    Move m; AIContext c;
    if(aiChoose(g_game,a,c,2,g_game.rng,m)){
       startPreview(m); snd("podp");
-      setStatus(g_game.mandatory(a,m)?L"Podpowiedź: ta karta musi iść na fundament.":L"Podpowiedź: tak możesz zagrać.",false,3.5);
+      setStatus(g_game.mandatory(a,m)?T(L"Podpowiedź: ta karta musi iść na fundament."):T(L"Podpowiedź: tak możesz zagrać."),false,3.5);
    } else if(!g_game.pile[turnedId(a)].empty()){
       startPreview({turnedId(a),wasteId(a)}); snd("podp");
-      setStatus(L"Brak ruchów: odrzuć dobraną kartę na śmietnik.",false,3.5);
+      setStatus(T(L"Brak ruchów: odrzuć dobraną kartę na śmietnik."),false,3.5);
    } else if(g_game.canDraw(a)){
       startPreview({handId(a),turnedId(a)}); snd("podp");
-      setStatus(L"Brak ruchów: dobierz kartę z talii.",false,3.5);
-   } else { snd("nono"); setStatus(L"Brak ruchów: kliknij talię (lub naciśnij D), żeby spasować.",true,3.5); }
+      setStatus(T(L"Brak ruchów: dobierz kartę z talii."),false,3.5);
+   } else { snd("nono"); setStatus(T(L"Brak ruchów: kliknij talię (lub naciśnij D), żeby spasować."),true,3.5); }
 }
 // A click on a card moves it to its best place (foundation, column, opponent's pile...).
 // For the turned card the best place may be the own waste pile: then it is discarded.
@@ -1070,12 +1075,12 @@ static void autoClick(int pile){
    }
    const Card* c=g_game.srcTop(pile,a);
    if(!c) return;
-   if(!g_autoMoves){ setStatus(L"Automatyczne ruchy są wyłączone (Ustawienia → Rozgrywka): przeciągnij kartę.",false,3); return; }
+   if(!g_autoMoves){ setStatus(T(L"Automatyczne ruchy są wyłączone (Ustawienia → Rozgrywka): przeciągnij kartę."),false,3); return; }
    // Best of ALL legal moves (see bestClickMove). Only when there is none: the turned card goes to the waste pile.
    Move best;
    if(bestClickMove(g_game,pile,best,a)){ humanMove(best.src,best.dst); return; }
    if(pile==turnedId(a)){ humanDiscard(); return; }
-   snd("nono"); setStatus(L"Ta karta nie ma żadnego dozwolonego ruchu.",true,2.5);
+   snd("nono"); setStatus(T(L"Ta karta nie ma żadnego dozwolonego ruchu."),true,2.5);
 }
 // Debug aid (F6): plays ONE step for the player the way the computer would (used to test network play by script).
 static void debugAutoStep(){
@@ -1172,8 +1177,8 @@ static void drawFoundationAce(int id,float x,float y){
 }
 static const wchar_t* slotLabel(int id){
    switch(ptype(id)){
-   case PT_RES: return L"Magazyn"; case PT_HAND: return L"Talia"; case PT_TURNED: return L"Dobrana";
-   case PT_WASTE: return L"Śmietnik"; case PT_FND: return L"A"; default: return L"";
+   case PT_RES: return T(L"Magazyn"); case PT_HAND: return T(L"Talia"); case PT_TURNED: return T(L"Dobrana");
+   case PT_WASTE: return T(L"Śmietnik"); case PT_FND: return L"A"; default: return L"";
    }
 }
 static void countPill(int id){
@@ -1206,15 +1211,15 @@ static void drawFireworks(){
 static bool btnVisible(int id){ return id!=B_CHAT || g_net.playing; }                // the chat button exists only in a network game
 static const wchar_t* btnLabel(int id,std::wstring& tmp){
    switch(id){
-   case B_NEW:      return L"Nowa gra";
-   case B_UNDO:     return L"Cofnij";
-   case B_HINT:     return L"Podpowiedź";
-   case B_NET:      return g_net.playing?L"Graj przez sieć ●":L"Graj przez sieć";
-   case B_HOT:      return g_hot?L"Hot seat ●":L"Hot seat";
-   case B_CHAT:     tmp=g_chat.unread>0?L"Czat ("+std::to_wstring(g_chat.unread)+L")":std::wstring(L"Czat"); return tmp.c_str();
-   case B_STATS:    return L"Statystyki";
-   case B_SETTINGS: return L"Ustawienia";
-   default:         return L"Zasady";
+   case B_NEW:      return T(L"Nowa gra");
+   case B_UNDO:     return T(L"Cofnij");
+   case B_HINT:     return T(L"Podpowiedź");
+   case B_NET:      return g_net.playing?T(L"Graj przez sieć ●"):T(L"Graj przez sieć");
+   case B_HOT:      return g_hot?T(L"Hot seat ●"):T(L"Hot seat");
+   case B_CHAT:     tmp=g_chat.unread>0?T(L"Czat (")+std::to_wstring(g_chat.unread)+L")":std::wstring(T(L"Czat")); return tmp.c_str();
+   case B_STATS:    return T(L"Statystyki");
+   case B_SETTINGS: return T(L"Ustawienia");
+   default:         return T(L"Zasady");
    }
 }
 static void layoutButtons(){
@@ -1579,7 +1584,7 @@ static void helpBuild(float width){
    for(const HelpItem& it:HELP_DOC){
       float px= it.kind==HK_H?22.f : it.kind==HK_NOTE?13.f : 16.f;
       float indent= it.kind==HK_B?24.f:0.f;
-      std::wstring text= it.lead ? std::wstring(it.lead)+L" – "+it.text : std::wstring(it.text);
+      std::wstring text= it.lead ? std::wstring(T(it.lead))+L" – "+T(it.text) : std::wstring(T(it.text));
       IDWriteTextFormat* f=nullptr;
       g_dw->CreateTextFormat(L"Segoe UI",nullptr,it.kind==HK_H?DWRITE_FONT_WEIGHT_BOLD:DWRITE_FONT_WEIGHT_NORMAL,
          it.kind==HK_NOTE?DWRITE_FONT_STYLE_ITALIC:DWRITE_FONT_STYLE_NORMAL,DWRITE_FONT_STRETCH_NORMAL,px,L"",&f);
@@ -1588,7 +1593,7 @@ static void helpBuild(float width){
       IDWriteTextLayout* lay=nullptr;
       g_dw->CreateTextLayout(text.c_str(),(UINT32)text.size(),f,width-indent,100000.f,&lay);
       f->Release(); if(!lay) continue;
-      if(it.lead){ DWRITE_TEXT_RANGE r={0,(UINT32)wcslen(it.lead)}; lay->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD,r); }
+      if(it.lead){ DWRITE_TEXT_RANGE r={0,(UINT32)wcslen(T(it.lead))}; lay->SetFontWeight(DWRITE_FONT_WEIGHT_BOLD,r); }
       DWRITE_TEXT_METRICS m{}; lay->GetMetrics(&m);
       float before= it.kind==HK_H?(y==0?0.f:24.f) : it.kind==HK_B?5.f : 8.f;
       HelpBlock b; b.lay=lay; b.kind=it.kind; b.y=y+before; b.h=m.height;
@@ -1614,7 +1619,7 @@ static void helpDraw(){
    rrect(px,py,pw,ph,16,0.05f,0.16f,0.10f,0.99f);                      // panel (dark felt)
    rrect(px,py,pw,ph,16,0.95f,0.80f,0.30f,0.85f,false,2.f);            // gold border
    txt(L"Garibaldka",px+28,py+12,pw-120,40,30,1.f,0.86f,0.25f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
-   txt(std::wstring(L"Wersja ")+APP_VERSION+L"  ·  zbudowana "+buildDateText(),px+29,py+48,pw-120,22,15,0.82f,0.90f,0.84f,0.9f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+   txt(std::wstring(T(L"Wersja "))+APP_VERSION+T(L"  ·  zbudowana ")+buildDateText(),px+29,py+48,pw-120,22,15,0.82f,0.90f,0.84f,0.9f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
    rrect(px+24,py+76,pw-48,1.5f,0,1,1,1,0.20f);                        // rule under the header
    // close button (an X made of two lines)
    float cbx=px+pw-52, cby=py+16;
@@ -1727,7 +1732,7 @@ static std::wstring clipboardText(){
 // clickable areas while they are drawn, the next mouse click looks them up.
 // ============================================================================
 struct SHit{ float x,y,w,h; int kind,a; };
-enum { SH_CLOSE=1, SH_GROUP, SH_CHECK, SH_LEVEL, SH_FORCE, SH_SLIDER, SH_SBROWSE, SH_SPLAY, SH_SMUTE, SH_SDEF, SH_KEY, SH_KEYCLR, SH_KEYDEF, SH_STATRESET };
+enum { SH_CLOSE=1, SH_LANG, SH_GROUP, SH_CHECK, SH_LEVEL, SH_FORCE, SH_SLIDER, SH_SBROWSE, SH_SPLAY, SH_SMUTE, SH_SDEF, SH_KEY, SH_KEYCLR, SH_KEYDEF, SH_STATRESET };
 struct SetUi{ bool open=false; int capture=-1; bool dragSlider=false; float sx=0, sw=1; std::vector<SHit> hits; };
 static SetUi g_set;
 struct StatUi{ bool open=false; std::vector<SHit> hits; };
@@ -1777,7 +1782,7 @@ static void settingsDraw(){
    if(!g_set.open||!g_rt||!g_dw) return;
    g_set.hits.clear();
    const float pw=std::min(880.f,G.w-30.f), ph=std::min(620.f,G.h-30.f), px=std::floor((G.w-pw)/2.f), py=std::floor((G.h-ph)/2.f);
-   uiPanel(px,py,pw,ph,L"Ustawienia",L"Zmiany działają od razu i są zapamiętywane w pliku .ini",g_set.hits);
+   uiPanel(px,py,pw,ph,T(L"Ustawienia"),T(L"Zmiany działają od razu i są zapamiętywane w pliku .ini"),g_set.hits);
    // groups (left)
    const float nx=px+24, ny=py+92, nw=176;
    for(int i=0;i<5;i++){
@@ -1785,42 +1790,46 @@ static void settingsDraw(){
       bool act=(g_setGroup==i);
       rrect(nx,y,nw,44,8,1,1,1,act?0.22f:0.07f);
       if(act) rrect(nx,y,nw,44,8,1.f,0.86f,0.30f,0.95f,false,2.f); else rrect(nx,y,nw,44,8,1,1,1,0.20f,false,1.f);
-      txt(SET_GROUPS[i],nx+14,y,nw-20,44,16,1,1,1,1.f,act,DWRITE_TEXT_ALIGNMENT_LEADING);
+      txt(T(SET_GROUPS[i]),nx+14,y,nw-20,44,16,1,1,1,1.f,act,DWRITE_TEXT_ALIGNMENT_LEADING);
       uiHit(g_set.hits,nx,y,nw,44,SH_GROUP,i);
    }
    rrect(nx+nw+14,ny,1.2f,ph-92-24,0,1,1,1,0.18f);
    const float cx=nx+nw+30, cw=px+pw-28-cx; float y=ny;
-   uiHeading(SET_GROUPS[g_setGroup],cx,y,cw); y+=48;
+   uiHeading(T(SET_GROUPS[g_setGroup]),cx,y,cw); y+=48;
    switch(g_setGroup){
    case 0:{                                                                  // General
-      uiCheck(g_set.hits,cx,y,cw,L"Sprawdzaj aktualizacje przy starcie gry",g_checkUpdates,0); y+=34;
-      uiNote(L"Gra pyta w serwisie GitHub, czy jest nowsza wersja, i proponuje jej zainstalowanie.",cx+32,y,cw-32,40); y+=56;
-      uiNote(std::wstring(L"Wersja ")+APP_VERSION+L", zbudowana "+buildDateText()+L".",cx,y,cw,22); y+=34;
-      uiNote(L"Obok programu leżą pliki: Garibaldi.ini (ustawienia i statystyki), Garibaldi.sav (zapis gry, tworzony na bieżąco) i garibaldka_ruchy.log (zapis wszystkich ruchów do analizy).",cx,y,cw,70);
+      uiCheck(g_set.hits,cx,y,cw,T(L"Sprawdzaj aktualizacje przy starcie gry"),g_checkUpdates,0); y+=34;
+      uiNote(T(L"Gra pyta w serwisie GitHub, czy jest nowsza wersja, i proponuje jej zainstalowanie."),cx+32,y,cw-32,40); y+=56;
+      txt(T(L"Język"),cx,y,200,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+      { float bx=cx+210; for(size_t i=0;i<i18n::all().size();i++){ const auto& L=i18n::all()[i]; float w=std::max(110.f,(float)L.name.size()*9.f+30.f);
+           uiButton(g_set.hits,bx,y,w,36,L.name,SH_LANG,(int)i,(int)i==i18n::cur()); bx+=w+10.f; } }
+      y+=58;
+      uiNote(std::wstring(T(L"Wersja "))+APP_VERSION+T(L", zbudowana ")+buildDateText()+L".",cx,y,cw,22); y+=34;
+      uiNote(T(L"Obok programu leżą pliki: Garibaldi.ini (ustawienia i statystyki), Garibaldi.sav (zapis gry, tworzony na bieżąco) i garibaldka_ruchy.log (zapis wszystkich ruchów do analizy)."),cx,y,cw,70);
       break;}
    case 1:{                                                                  // Gameplay
-      txt(L"Poziom gry (komputer)",cx,y,260,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
-      uiButton(g_set.hits,cx+270,y,220,36,std::wstring(L"Poziom: ")+LEVEL_NAMES[g_level],SH_LEVEL,0);
-      y+=44; uiNote(L"Kliknij przycisk, żeby zmienić poziom. Poziomy różnią się tym, ile ruchów naprzód komputer przewiduje: Łatwy 1, Normalny 2, Trudny 4. Żaden nie pomija ruchów.",cx,y,cw,44); y+=62;
-      uiCheck(g_set.hits,cx,y,cw,L"Automatyczne ruchy",g_autoMoves,2); y+=34;
-      uiNote(L"Kliknięcie karty przenosi ją na najlepsze miejsce (kliknięcie karty w kolumnie przenosi cały sekwens). Po wyłączeniu kartę można przenosić tylko przeciąganiem; kliknięcie własnej talii nadal dobiera kartę.",cx+32,y,cw-32,62); y+=80;
-      txt(L"Przymus fundamentu",cx,y,260,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+      txt(T(L"Poziom gry (komputer)"),cx,y,260,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+      uiButton(g_set.hits,cx+270,y,220,36,std::wstring(T(L"Poziom: "))+levelName(g_level),SH_LEVEL,0);
+      y+=44; uiNote(T(L"Kliknij przycisk, żeby zmienić poziom. Poziomy różnią się tym, ile ruchów naprzód komputer przewiduje: Łatwy 1, Normalny 2, Trudny 4. Żaden nie pomija ruchów."),cx,y,cw,44); y+=62;
+      uiCheck(g_set.hits,cx,y,cw,T(L"Automatyczne ruchy"),g_autoMoves,2); y+=34;
+      uiNote(T(L"Kliknięcie karty przenosi ją na najlepsze miejsce (kliknięcie karty w kolumnie przenosi cały sekwens). Po wyłączeniu kartę można przenosić tylko przeciąganiem; kliknięcie własnej talii nadal dobiera kartę."),cx+32,y,cw-32,62); y+=80;
+      txt(T(L"Przymus fundamentu"),cx,y,260,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
       const bool twoPlayers=g_hot||g_net.playing;                            // with another person the penalty always applies
-      uiButton(g_set.hits,cx+270,y,120,36,L"Karaj",SH_FORCE,0,effForce()==0);
-      uiButton(g_set.hits,cx+398,y,120,36,L"Przypomnij",SH_FORCE,1,effForce()==1,!twoPlayers);
+      uiButton(g_set.hits,cx+270,y,120,36,T(L"Karaj"),SH_FORCE,0,effForce()==0);
+      uiButton(g_set.hits,cx+398,y,120,36,T(L"Przypomnij"),SH_FORCE,1,effForce()==1,!twoPlayers);
       y+=44;
       uiNote(twoPlayers
-         ? L"W grze z drugim graczem (hot seat, przez sieć) zawsze obowiązuje „Karaj”. Opcja „Przypomnij” działa tylko w grze z komputerem."
+         ? T(L"W grze z drugim graczem (hot seat, przez sieć) zawsze obowiązuje „Karaj”. Opcja „Przypomnij” działa tylko w grze z komputerem.")
          : g_forceMode==0
-         ? L"Karaj: kto pominie ruch na fundament, natychmiast traci turę, a jego zagranie nie zostaje wykonane."
-         : L"Przypomnij: zamiast kary gra pokazuje obowiązkowy ruch na fundament i blokuje zagranie, które chciałeś wykonać. Dopóki go nie zrobisz, nie zagrasz niczego innego.",cx,y,cw,62);
+         ? T(L"Karaj: kto pominie ruch na fundament, natychmiast traci turę, a jego zagranie nie zostaje wykonane.")
+         : T(L"Przypomnij: zamiast kary gra pokazuje obowiązkowy ruch na fundament i blokuje zagranie, które chciałeś wykonać. Dopóki go nie zrobisz, nie zagrasz niczego innego."),cx,y,cw,62);
       break;}
    case 2:                                                                   // Graphics (empty for now)
-      uiNote(L"Na razie brak ustawień grafiki.",cx,y,cw,24);
+      uiNote(T(L"Na razie brak ustawień grafiki."),cx,y,cw,24);
       break;
    case 3:{                                                                  // Sound
-      uiCheck(g_set.hits,cx,y,cw,L"Dźwięk włączony",!g_muted,1); y+=40;
-      txt(L"Głośność",cx,y,100,30,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+      uiCheck(g_set.hits,cx,y,cw,T(L"Dźwięk włączony"),!g_muted,1); y+=40;
+      txt(T(L"Głośność"),cx,y,100,30,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
       g_set.sx=cx+110; g_set.sw=cw-110-70;
       rrect(g_set.sx,y+12,g_set.sw,6,3,1,1,1,0.20f);
       rrect(g_set.sx,y+12,g_set.sw*g_volPct/100.f,6,3,1.f,0.86f,0.30f,0.95f);
@@ -1829,34 +1838,34 @@ static void settingsDraw(){
       uiHit(g_set.hits,g_set.sx-10,y,g_set.sw+20,30,SH_SLIDER);
       txt(std::to_wstring(g_volPct)+L"%",cx+cw-60,y,60,30,15,1,1,1,1.f,false,DWRITE_TEXT_ALIGNMENT_TRAILING);
       y+=44;
-      txt(L"Własne dźwięki (WAV lub MP3)",cx,y,cw,26,15,1.f,0.86f,0.30f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING); y+=32;
+      txt(T(L"Własne dźwięki (WAV lub MP3)"),cx,y,cw,26,15,1.f,0.86f,0.30f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING); y+=32;
       for(int i=0;i<SOUND_COUNT;i++,y+=38){
          const bool mut=SoundSystem::instance().isMuted(i); const std::wstring& cp=SoundSystem::instance().customPath(i);
-         txt(SOUND_LABELS[i],cx,y,190,32,14.5f,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
-         std::wstring cur=mut?L"(bez dźwięku)":cp.empty()?L"domyślny":fileBase(cp);
+         txt(T(SOUND_LABELS[i]),cx,y,190,32,14.5f,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+         std::wstring cur=mut?T(L"(bez dźwięku)"):cp.empty()?T(L"domyślny"):fileBase(cp);
          rrect(cx+194,y+2,cw-194-196,28,6,0,0,0,0.30f);
          txt(cur,cx+202,y+2,cw-194-196-16,28,13.5f,mut?0.75f:1.f,mut?0.75f:1.f,mut?0.75f:0.92f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
          float bx=cx+cw-190;
-         uiButton(g_set.hits,bx,y+1,70,30,L"Wybierz",SH_SBROWSE,i,false,true,13.f);
+         uiButton(g_set.hits,bx,y+1,70,30,T(L"Wybierz"),SH_SBROWSE,i,false,true,13.f);
          uiButton(g_set.hits,bx+76,y+1,36,30,L"▶",SH_SPLAY,i,false,!mut,13.f);
          uiButton(g_set.hits,bx+116,y+1,36,30,L"✕",SH_SMUTE,i,mut,true,13.f);
          uiButton(g_set.hits,bx+156,y+1,36,30,L"↺",SH_SDEF,i,false,mut||!cp.empty(),13.f);
       }
       break;}
    case 4:{                                                                  // Controls
-      uiNote(L"Kliknij pole skrótu i naciśnij klawisz. Każda akcja ma dwa skróty. Klawisz przypisany do jednej akcji jest zabierany innej.",cx,y-4,cw,40); y+=38;
+      uiNote(T(L"Kliknij pole skrótu i naciśnij klawisz. Każda akcja ma dwa skróty. Klawisz przypisany do jednej akcji jest zabierany innej."),cx,y-4,cw,40); y+=38;
       for(int i=0;i<KA_COUNT;i++,y+=32){
-         txt(KA_LABELS[i],cx,y,240,30,14.5f,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+         txt(T(KA_LABELS[i]),cx,y,240,30,14.5f,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
          for(int s=0;s<2;s++){
             float bx=cx+250+s*160; int id=i*2+s;
             bool cap=(g_set.capture==id);
-            uiButton(g_set.hits,bx,y,104,28,cap?std::wstring(L"Naciśnij…"):vkName(g_keys[i].key[s]),SH_KEY,id,cap,true,13.5f);
+            uiButton(g_set.hits,bx,y,104,28,cap?std::wstring(T(L"Naciśnij…")):vkName(g_keys[i].key[s]),SH_KEY,id,cap,true,13.5f);
             uiButton(g_set.hits,bx+108,y,28,28,L"✕",SH_KEYCLR,id,false,g_keys[i].key[s]!=0,12.f);
          }
       }
       y+=6;
-      uiButton(g_set.hits,cx,y,200,34,L"Przywróć domyślne",SH_KEYDEF,0);
-      uiNote(L"Stałe: Ctrl+Z (cofnij), Enter (czat), Esc (zamknij okno).",cx+212,y+4,cw-212,30);
+      uiButton(g_set.hits,cx,y,200,34,T(L"Przywróć domyślne"),SH_KEYDEF,0);
+      uiNote(T(L"Stałe: Ctrl+Z (cofnij), Enter (czat), Esc (zamknij okno)."),cx+212,y+4,cw-212,30);
       break;}
    }
 }
@@ -1872,6 +1881,7 @@ static void settingsMouseDown(float mx,float my){
       switch(h.kind){
       case SH_CLOSE: showSettings(); return;
       case SH_GROUP: g_setGroup=h.a; saveSettings(); break;
+      case SH_LANG:  i18n::setLanguage(i18n::all()[h.a].code); g_help.builtW=-1; setStatus(T(L"Język zmieniony."),false,2.5); saveSettings(); break;
       case SH_CHECK:
          if(h.a==0) g_checkUpdates=!g_checkUpdates;
          else if(h.a==1){ g_muted=!g_muted; if(g_muted) SoundSystem::instance().fadeOutAll(100); else snd("click"); }
@@ -1883,9 +1893,11 @@ static void settingsMouseDown(float mx,float my){
       case SH_SBROWSE:{
          wchar_t path[MAX_PATH]={};
          OPENFILENAMEW ofn={}; ofn.lStructSize=sizeof(ofn); ofn.hwndOwner=g_hwnd;
-         ofn.lpstrFilter=L"Pliki dźwiękowe (*.wav;*.mp3)\0*.wav;*.mp3\0WAV (*.wav)\0*.wav\0MP3 (*.mp3)\0*.mp3\0Wszystkie pliki\0*.*\0";
+         std::wstring filter; { auto part=[&](const std::wstring& label,const wchar_t* pat){ filter+=label; filter.push_back(L'\0'); filter+=pat; filter.push_back(L'\0'); };
+            part(std::wstring(T(L"Pliki dźwiękowe"))+L" (*.wav;*.mp3)",L"*.wav;*.mp3"); part(L"WAV (*.wav)",L"*.wav"); part(L"MP3 (*.mp3)",L"*.mp3"); part(std::wstring(T(L"Wszystkie pliki"))+L" (*.*)",L"*.*"); }
+         ofn.lpstrFilter=filter.c_str();
          ofn.lpstrFile=path; ofn.nMaxFile=MAX_PATH; ofn.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST;
-         wchar_t title[64]={}; wcsncpy(title,SOUND_LABELS[h.a],63); ofn.lpstrTitle=title;
+         wchar_t title[64]={}; wcsncpy(title,T(SOUND_LABELS[h.a]),63); ofn.lpstrTitle=title;
          if(GetOpenFileNameW(&ofn)){
             SoundSystem::instance().setCustomPath(h.a,path); SoundSystem::instance().setMuted(h.a,false);
             SoundSystem::instance().fadeOutAll(100); SoundSystem::instance().playIdx(h.a,g_volPct/100.f);
@@ -1920,14 +1932,14 @@ static void statsDraw(){
    if(!g_stat.open||!g_rt||!g_dw) return;
    g_stat.hits.clear();
    const float pw=std::min(820.f,G.w-30.f), ph=std::min(520.f,G.h-30.f), px=std::floor((G.w-pw)/2.f), py=std::floor((G.h-ph)/2.f);
-   uiPanel(px,py,pw,ph,L"Statystyki",L"Rozegrane i zakończone partie z tego komputera",g_stat.hits);
+   uiPanel(px,py,pw,ph,T(L"Statystyki"),T(L"Rozegrane i zakończone partie z tego komputera"),g_stat.hits);
    const float x0=px+30, w=pw-60;
    const float cols[6]={0.26f,0.14f,0.14f,0.14f,0.12f,0.20f};          // widths as fractions
-   const wchar_t* heads[6]={L"Tryb gry",L"Rozegrane",L"Wygrane",L"Przegrane",L"Remisy",L"% wygranych"};
+   const wchar_t* heads[6]={T(L"Tryb gry"),T(L"Rozegrane"),T(L"Wygrane"),T(L"Przegrane"),T(L"Remisy"),T(L"% wygranych")};
    float y=py+92;
    { float x=x0; for(int c=0;c<6;c++){ txt(heads[c],x+(c==0?0.f:0.f),y,w*cols[c],30,15,1.f,0.86f,0.30f,1.f,true,c==0?DWRITE_TEXT_ALIGNMENT_LEADING:DWRITE_TEXT_ALIGNMENT_CENTER); x+=w*cols[c]; } }
    y+=34; rrect(x0,y,w,1.5f,0,1.f,0.86f,0.30f,0.45f); y+=8;
-   const wchar_t* names[5]={L"Komputer: Łatwy",L"Komputer: Normalny",L"Komputer: Trudny",L"Gra przez sieć",L"Razem"};
+   const wchar_t* names[5]={T(L"Komputer: Łatwy"),T(L"Komputer: Normalny"),T(L"Komputer: Trudny"),T(L"Gra przez sieć"),T(L"Razem")};
    StatRow tot; for(int i=0;i<4;i++){ tot.games+=g_stats[i].games; tot.wins+=g_stats[i].wins; tot.draws+=g_stats[i].draws; }
    for(int r=0;r<5;r++){
       const StatRow& s= r<4?g_stats[r]:tot;
@@ -1944,8 +1956,8 @@ static void statsDraw(){
       y+=46;
    }
    y+=10;
-   uiNote(L"% wygranych to wygrane podzielone przez rozegrane partie (remis liczy się jako rozegrana, a niewygrana). Partie z komputerem liczą się na poziomie, na którym je rozpoczęto, i tylko gdy zostały dokończone. Gry hot seat nie są liczone.",x0,y,w,60);
-   uiButton(g_stat.hits,x0,py+ph-60,190,36,L"Wyzeruj statystyki",SH_STATRESET,0);
+   uiNote(T(L"% wygranych to wygrane podzielone przez rozegrane partie (remis liczy się jako rozegrana, a niewygrana). Partie z komputerem liczą się na poziomie, na którym je rozpoczęto, i tylko gdy zostały dokończone. Gry hot seat nie są liczone."),x0,y,w,60);
+   uiButton(g_stat.hits,x0,py+ph-60,190,36,T(L"Wyzeruj statystyki"),SH_STATRESET,0);
 }
 static void statsMouseDown(float mx,float my){
    const float pw=std::min(820.f,G.w-30.f), ph=std::min(520.f,G.h-30.f), px=std::floor((G.w-pw)/2.f), py=std::floor((G.h-ph)/2.f);
@@ -1953,7 +1965,7 @@ static void statsMouseDown(float mx,float my){
       if(mx<h.x||mx>h.x+h.w||my<h.y||my>h.y+h.h) continue;
       if(h.kind==SH_CLOSE){ showStats(); return; }
       if(h.kind==SH_STATRESET){
-         if(MessageBoxW(g_hwnd,L"Wyzerować wszystkie statystyki? Tego nie można cofnąć.",L"Statystyki",MB_YESNO|MB_ICONQUESTION)==IDYES){
+         if(MessageBoxW(g_hwnd,T(L"Wyzerować wszystkie statystyki? Tego nie można cofnąć."),T(L"Statystyki"),MB_YESNO|MB_ICONQUESTION)==IDYES){
             for(auto& s:g_stats) s=StatRow(); saveSettings();
          }
          g_dirty=true; return;
@@ -1975,15 +1987,15 @@ static NpLayout npLayout(){
    L.tabw=(L.pw-60-12)/2; L.tabh=38; L.taby=L.py+86; L.tabx[0]=L.px+30; L.tabx[1]=L.tabx[0]+L.tabw+12;
    const float fx=L.px+30, fw=L.pw-60, fy=L.py+168, fh=36, gap=76;
    auto add=[&](const wchar_t* lab,std::wstring* t,size_t mx,int kind,float x,float y,float w){ L.f.push_back({lab,t,mx,kind,x,y,w,fh}); };
-   add(L"Twój nick",&g_nickW,16,0,fx,fy,fw);
+   add(T(L"Twój nick"),&g_nickW,16,0,fx,fy,fw);
    if(g_np.tab==0){
-      add(L"Adres IP hosta (do połączenia)",&g_ipW,45,1,fx,fy+gap,fw);
+      add(T(L"Adres IP hosta (do połączenia)"),&g_ipW,45,1,fx,fy+gap,fw);
       L.by=fy+2*gap+2;
    } else {
-      add(L"Adres serwera",&g_serverW,100,1,fx,fy+gap,fw);
+      add(T(L"Adres serwera"),&g_serverW,100,1,fx,fy+gap,fw);
       const float w1=(fw-12)*0.62f;
-      add(L"Hasło serwera (od znajomych)",&g_inviteW,40,0,fx,fy+2*gap,w1);
-      add(L"Kod pokoju (do dołączenia)",&g_codeW,4,2,fx+w1+12,fy+2*gap,fw-w1-12);
+      add(T(L"Hasło serwera (od znajomych)"),&g_inviteW,40,0,fx,fy+2*gap,w1);
+      add(T(L"Kod pokoju (do dołączenia)"),&g_codeW,4,2,fx+w1+12,fy+2*gap,fw-w1-12);
       L.by=fy+3*gap+2;
    }
    L.bh=42; L.bw=(fw-24)/3;
@@ -2003,19 +2015,19 @@ static void npField(const NpField& f,bool focus,bool enabled){
    txt(*f.text+(caret?L"|":L""),f.x+10,f.y,f.w-20,f.h,16,1,1,1,enabled?1.f:0.55f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
 }
 static std::wstring npInfoText(){
-   if(g_net.playing) return L"Trwa gra z: "+g_net.peerNick+L".";
-   if(g_net.connected) return L"Połączono"+(g_net.peerNick.empty()?std::wstring():L" z "+g_net.peerNick)+L". Uzgadnianie…";
-   if(g_net.listening && g_net.online) return L"Pokój otwarty. Podaj znajomemu ten kod i adres serwera. Czekam, aż dołączy…";
+   if(g_net.playing) return T(L"Trwa gra z: ")+g_net.peerNick+L".";
+   if(g_net.connected) return T(L"Połączono")+(g_net.peerNick.empty()?std::wstring():T(L" z ")+g_net.peerNick)+T(L". Uzgadnianie…");
+   if(g_net.listening && g_net.online) return T(L"Pokój otwarty. Podaj znajomemu ten kod i adres serwera. Czekam, aż dołączy…");
    if(g_net.listening){
-      std::wstring s=L"Czekam na znajomego (port "+std::to_wstring(net::DEFAULT_PORT)+L").\nPodaj mu jeden z adresów swojego komputera:\n";
+      std::wstring s=T(L"Czekam na znajomego (port ")+std::to_wstring(net::DEFAULT_PORT)+T(L").\nPodaj mu jeden z adresów swojego komputera:\n");
       for(auto& a:g_myAddrs) s+=L"      "+net::fromUtf8(a)+L"\n";
-      if(g_myAddrs.empty()) s+=L"      (nie udało się ustalić adresu)\n";
+      if(g_myAddrs.empty()) s+=T(L"      (nie udało się ustalić adresu)\n");
       return s;
    }
-   if(g_net.connecting) return g_net.online ? L"Łączenie z serwerem…" : L"Łączenie…";
+   if(g_net.connecting) return g_net.online ? T(L"Łączenie z serwerem…") : T(L"Łączenie…");
    if(!g_np.info.empty()) return g_np.info;
-   if(g_np.tab==1) return L"Jeden z Was klika „Utwórz pokój” i podaje znajomemu kod, drugi wpisuje kod i klika „Dołącz”. Nick jest zastrzeżony na serwerze tylko dla Ciebie.";
-   return L"Jeden z Was klika „Hostuj grę”, drugi wpisuje adres IP hosta i klika „Połącz”.\nW sieci lokalnej adres hosta to np. 192.168.0.12.";
+   if(g_np.tab==1) return T(L"Jeden z Was klika „Utwórz pokój” i podaje znajomemu kod, drugi wpisuje kod i klika „Dołącz”. Nick jest zastrzeżony na serwerze tylko dla Ciebie.");
+   return T(L"Jeden z Was klika „Hostuj grę”, drugi wpisuje adres IP hosta i klika „Połącz”.\nW sieci lokalnej adres hosta to np. 192.168.0.12.");
 }
 static void drawNetPanel(){
    if(!g_np.open||!g_rt||!g_dw) return;
@@ -2024,13 +2036,13 @@ static void drawNetPanel(){
    rrect(L.px+5,L.py+8,L.pw,L.ph,16,0,0,0,0.40f);
    rrect(L.px,L.py,L.pw,L.ph,16,0.05f,0.16f,0.10f,0.99f);
    rrect(L.px,L.py,L.pw,L.ph,16,0.95f,0.80f,0.30f,0.85f,false,2.f);
-   txt(L"Gra z drugim graczem",L.px+28,L.py+14,L.pw-120,40,28,1.f,0.86f,0.25f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
-   txt(g_np.tab==1?L"Przez internet: serwer łączy Was kodem pokoju":L"W sieci lokalnej: jeden gracz hostuje, drugi się łączy",L.px+29,L.py+52,L.pw-60,22,14,0.82f,0.90f,0.84f,0.9f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+   txt(T(L"Gra z drugim graczem"),L.px+28,L.py+14,L.pw-120,40,28,1.f,0.86f,0.25f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
+   txt(g_np.tab==1?T(L"Przez internet: serwer łączy Was kodem pokoju"):T(L"W sieci lokalnej: jeden gracz hostuje, drugi się łączy"),L.px+29,L.py+52,L.pw-60,22,14,0.82f,0.90f,0.84f,0.9f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
    rrect(L.px+24,L.py+80,L.pw-48,1.5f,0,1,1,1,0.20f);
    rrect(L.cbx,L.cby,34,34,8,1,1,1,0.14f); rrect(L.cbx,L.cby,34,34,8,1,1,1,0.35f,false,1.f);
    g_ren.drawLine(L.cbx+11,L.cby+11,L.cbx+23,L.cby+23,2.2f,255,255,255,230); g_ren.drawLine(L.cbx+23,L.cby+11,L.cbx+11,L.cby+23,2.2f,255,255,255,230);
    const bool busy=netBusy();
-   const wchar_t* tabNames[2]={L"Sieć lokalna",L"Internet"};
+   const wchar_t* tabNames[2]={T(L"Sieć lokalna"),L"Internet"};
    for(int i=0;i<2;i++){
       bool act=(g_np.tab==i);
       rrect(L.tabx[i],L.taby,L.tabw,L.tabh,8,1,1,1,act?0.22f:0.06f);
@@ -2039,13 +2051,13 @@ static void drawNetPanel(){
    }
    if(g_np.focus>=(int)L.f.size()) g_np.focus=0;
    for(size_t i=0;i<L.f.size();i++) npField(L.f[i],(int)i==g_np.focus,!busy);
-   const wchar_t* b0=g_np.tab==1?L"Utwórz pokój":L"Hostuj grę", *b1=g_np.tab==1?L"Dołącz":L"Połącz";
+   const wchar_t* b0=g_np.tab==1?T(L"Utwórz pokój"):T(L"Hostuj grę"), *b1=g_np.tab==1?T(L"Dołącz"):T(L"Połącz");
    npButton(L.bx[0],L.by,L.bw,L.bh,b0,!busy);
    npButton(L.bx[1],L.by,L.bw,L.bh,b1,!busy);
-   npButton(L.bx[2],L.by,L.bw,L.bh,g_net.playing?L"Opuść grę":L"Rozłącz",busy);
+   npButton(L.bx[2],L.by,L.bw,L.bh,g_net.playing?T(L"Opuść grę"):T(L"Rozłącz"),busy);
    float iy=L.infoY;
    if(g_net.online && g_net.listening && !g_net.roomCode.empty()){          // the room code, big
-      txt(L"Kod pokoju",L.px+30,iy,L.pw-60,22,14,0.92f,0.95f,0.92f,1.f,true);
+      txt(T(L"Kod pokoju"),L.px+30,iy,L.pw-60,22,14,0.92f,0.95f,0.92f,1.f,true);
       txt(net::fromUtf8(g_net.roomCode),L.px+30,iy+16,L.pw-60,70,60,1.f,0.86f,0.25f,1.f,true);
       iy+=92;
    }
@@ -2098,7 +2110,7 @@ static void drawChat(){
    if(!g_chat.open||!g_net.playing||!g_rt) return;
    ChatRects r=chatRects();
    rrect(r.x,r.y,r.w,r.h,12,0.04f,0.13f,0.09f,0.95f); rrect(r.x,r.y,r.w,r.h,12,0.95f,0.80f,0.30f,0.7f,false,1.5f);
-   txt(L"Czat z "+g_net.peerNick,r.x+14,r.y+4,r.w-60,28,15,1.f,0.86f,0.25f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
+   txt(T(L"Czat z ")+g_net.peerNick,r.x+14,r.y+4,r.w-60,28,15,1.f,0.86f,0.25f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
    g_ren.drawLine(r.x+r.w-26,r.y+10,r.x+r.w-14,r.y+22,2.f,255,255,255,220); g_ren.drawLine(r.x+r.w-14,r.y+10,r.x+r.w-26,r.y+22,2.f,255,255,255,220);
    // the newest lines at the bottom of the log area
    g_rt->PushAxisAlignedClip(D2D1::RectF(r.mx,r.my,r.mx+r.mw,r.my+r.mh),D2D1_ANTIALIAS_MODE_ALIASED);
@@ -2118,7 +2130,7 @@ static void drawChat(){
    rrect(r.ix,r.iy,r.iw,r.ih,8,0,0,0,0.35f); rrect(r.ix,r.iy,r.iw,r.ih,8,1.f,0.86f,0.30f,0.8f,false,1.5f);
    bool caret=((int)(nowSec()*2.0)%2==0);
    std::wstring shown=g_chat.input; if(shown.size()>34) shown=shown.substr(shown.size()-34);
-   txt(g_chat.input.empty()?std::wstring(L"Napisz wiadomość i naciśnij Enter")+(caret?L"":L""):shown+(caret?L"|":L""),r.ix+8,r.iy,r.iw-16,r.ih,14,
+   txt(g_chat.input.empty()?std::wstring(T(L"Napisz wiadomość i naciśnij Enter"))+(caret?L"":L""):shown+(caret?L"|":L""),r.ix+8,r.iy,r.iw-16,r.ih,14,
        g_chat.input.empty()?0.65f:1.f,g_chat.input.empty()?0.72f:1.f,g_chat.input.empty()?0.66f:1.f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
 }
 static bool chatMouseDown(float mx,float my){
@@ -2150,8 +2162,8 @@ static void drawNetExtras(double now){
       txt(n,slotX(1)+G.cw*0.30f,rowY(p)+G.ch*0.5f-14,G.cw*1.9f,28,15,1,1,1,0.92f,true,DWRITE_TEXT_ALIGNMENT_LEADING);
    }
    if(g_net.online && g_net.hasH2h){                                       // my record against this opponent
-      std::wstring r=L"Bilans z "+g_net.peerNick+L": "+std::to_wstring(g_net.h2hW)+L":"+std::to_wstring(g_net.h2hL);
-      if(g_net.h2hD>0) r+=L"  (remisy: "+std::to_wstring(g_net.h2hD)+L")";
+      std::wstring r=T(L"Bilans z ")+g_net.peerNick+L": "+std::to_wstring(g_net.h2hW)+L":"+std::to_wstring(g_net.h2hL);
+      if(g_net.h2hD>0) r+=T(L"  (remisy: ")+std::to_wstring(g_net.h2hD)+L")";
       txt(r,slotX(1)+G.cw*0.30f,rowY(0)+G.ch*0.5f+10,G.cw*3.2f,24,13,0.85f,0.92f,0.85f,0.9f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
    }
    for(size_t i=0;i<g_emotes.size();){
@@ -2292,9 +2304,9 @@ static void render(){
       float dim=(float)std::min(1.0,(now-g_overAt)/0.6)*0.45f;
       rrect(0,TB,G.w,G.h-TB-SB,0,0,0,0,dim);
       drawFireworks();
-      std::wstring t=g_hot?(g_game.winner<0?std::wstring(L"Remis"):hotName(g_game.winner)+L" wygrywa"):g_game.winner==0?L"Wygrywasz!":g_game.winner==1?L"Komputer wygrał":L"Remis";
+      std::wstring t=g_hot?(g_game.winner<0?std::wstring(T(L"Remis")):hotName(g_game.winner)+T(L" wygrywa")):g_game.winner==0?T(L"Wygrywasz!"):g_game.winner==1?T(L"Komputer wygrał"):T(L"Remis");
       txt(t,0,G.h/2-70,G.w,80,64,1.f,0.86f,0.2f,1.f,true);
-      txt(L"Kliknij „Nowa gra” (F2), aby zagrać ponownie",0,G.h/2+10,G.w,40,20,1,1,1,0.9f,false);
+      txt(T(L"Kliknij „Nowa gra” (F2), aby zagrać ponownie"),0,G.h/2+10,G.w,40,20,1,1,1,0.9f,false);
    }
    // status bar
    rrect(0,G.h-SB,G.w,SB,0,0,0,0,0.38f);
@@ -2344,8 +2356,8 @@ static void doButton(int id){
    case B_HOT:
       if(g_net.playing) break;
       if(!g_game.over && g_game.totalTurns>0 &&
-         MessageBoxW(g_hwnd,g_hot?L"Zakończyć grę dwóch graczy i zacząć nową grę z komputerem?\nBieżąca partia zostanie porzucona.":L"Zacząć nową grę w trybie hot seat (dwóch graczy przy jednym komputerze)?\nBieżąca partia zostanie porzucona.",
-                     L"Hot seat",MB_YESNO|MB_ICONQUESTION)!=IDYES) break;
+         MessageBoxW(g_hwnd,g_hot?T(L"Zakończyć grę dwóch graczy i zacząć nową grę z komputerem?\nBieżąca partia zostanie porzucona."):T(L"Zacząć nową grę w trybie hot seat (dwóch graczy przy jednym komputerze)?\nBieżąca partia zostanie porzucona."),
+                     T(L"Hot seat"),MB_YESNO|MB_ICONQUESTION)!=IDYES) break;
       g_hot=!g_hot; newGameStart(); break;
    case B_CHAT:    g_chat.open=!g_chat.open; if(g_chat.open) g_chat.unread=0; break;
    case B_STATS:   showStats(); break;
@@ -2385,7 +2397,7 @@ static void startSeqPlan(const std::vector<Move>& plan){
    pushUndo();                                                  // the whole sequence is a single undo step
    g_plan.active=true; g_plan.moves=plan; g_plan.next=0; g_plan.at=nowSec()+0.22;   // let the dragged cards return first
    g_prev.active=false;
-   setStatus(plan.size()>1?L"Przenoszę sekwens kolejnymi ruchami…":L"Przenoszę kartę…");
+   setStatus(plan.size()>1?T(L"Przenoszę sekwens kolejnymi ruchami…"):T(L"Przenoszę kartę…"));
 }
 static void planTick(double now){
    if(!g_plan.active||now<g_plan.at||anyAnimating(now)) return;
@@ -2395,7 +2407,7 @@ static void planTick(double now){
    humanMove(m.src,m.dst,false);
    g_plan.next++; g_plan.at=now+0.05;
    if(g_plan.next>=g_plan.moves.size()) g_plan.active=false;
-   else if(!g_game.over) setStatus(L"Przenoszę sekwens kolejnymi ruchami…");
+   else if(!g_game.over) setStatus(T(L"Przenoszę sekwens kolejnymi ruchami…"));
 }
 // A click on a card inside a column: the whole sequence from that card goes to the best column.
 static void autoSeq(int src,int idx){
@@ -2407,7 +2419,7 @@ static void autoSeq(int src,int idx){
       // prefer a column with cards on it, then the shorter plan
       if(bestDst<0 || (bestEmpty&&!empty) || (empty==bestEmpty && pl.size()<best.size())){ best=pl; bestDst=d; bestEmpty=empty; }
    }
-   if(bestDst<0){ snd("nono"); setStatus(L"Ten sekwens nie ma gdzie przejść (albo brakuje wolnego miejsca).",true,3); return; }
+   if(bestDst<0){ snd("nono"); setStatus(T(L"Ten sekwens nie ma gdzie przejść (albo brakuje wolnego miejsca)."),true,3); return; }
    startSeqPlan(best);
 }
 // index of the topmost card of column `col` under the point, or -1
@@ -2509,7 +2521,7 @@ static void onLUp(int mx,int my){
          if(dst>=0 && seqTarget(src,idx,dst,plan)) startSeqPlan(plan);
          else {
             if(h>=0 && ptype(h)==PT_TAB && h!=src && g_game.canPlace(g_game.pile[src][idx],h,actor(),src)){
-               snd("nono"); setStatus(L"Za mało wolnego miejsca, żeby przenieść ten sekwens.",true,3);
+               snd("nono"); setStatus(T(L"Za mało wolnego miejsca, żeby przenieść ten sekwens."),true,3);
             } else if(h>=0 && h!=src) snd("nono");
             relayout();
          }
@@ -2518,8 +2530,8 @@ static void onLUp(int mx,int my){
    }
    int p=hitPile((float)mx,(float)my);
    if(p>=0 && p==g_drag.pile && humanTurn()){
-      if(g_drag.idx>=0){ if(g_autoMoves) autoSeq(p,g_drag.idx); else setStatus(L"Automatyczne ruchy są wyłączone (Ustawienia → Rozgrywka): przeciągnij kartę.",false,3); }   // click inside a column: move the sequence from that card
-      else if(g_drag.badRun){ snd("nono"); setStatus(L"To nie jest sekwens: przenosić można tylko ułożone karty (malejąco, na przemian kolory).",true,3); }
+      if(g_drag.idx>=0){ if(g_autoMoves) autoSeq(p,g_drag.idx); else setStatus(T(L"Automatyczne ruchy są wyłączone (Ustawienia → Rozgrywka): przeciągnij kartę."),false,3); }   // click inside a column: move the sequence from that card
+      else if(g_drag.badRun){ snd("nono"); setStatus(T(L"To nie jest sekwens: przenosić można tylko ułożone karty (malejąco, na przemian kolory)."),true,3); }
       else autoClick(p);                                          // a plain click moves the card to its best place
    }
 }
@@ -2606,20 +2618,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
       std::unique_ptr<update::ReleaseInfo> info((update::ReleaseInfo*)lp);
       g_updateBusy=false; g_dirty=true;
       if(info->ok && update::isNewer(info->tag,APP_VERSION)){
-         std::wstring m=L"Dostępna nowsza wersja gry: "+info->tag+L" (masz "+std::wstring(APP_VERSION)+L").\n\nZaktualizować teraz?";
+         std::wstring m=T(L"Dostępna nowsza wersja gry: ")+info->tag+T(L" (masz ")+std::wstring(APP_VERSION)+T(L").\n\nZaktualizować teraz?");
          if(!info->notes.empty()){
             std::wstring notes=info->notes;
             if(notes.size()>500) notes=notes.substr(0,500)+L"…";
-            m+=L"\n\nCo nowego:\n"+notes;
+            m+=T(L"\n\nCo nowego:\n")+notes;
          }
-         if(MessageBoxW(hwnd,m.c_str(),L"Aktualizacja dostępna",MB_YESNO|MB_ICONINFORMATION)==IDYES)
+         if(MessageBoxW(hwnd,m.c_str(),T(L"Aktualizacja dostępna"),MB_YESNO|MB_ICONINFORMATION)==IDYES)
             beginUpdateDownload(hwnd,info->downloadUrl);
       }
       return 0;}
    case WM_UPDATE_DOWNLOAD_DONE:{
       std::unique_ptr<UpdateDownloadJob> job((UpdateDownloadJob*)lp);
       if(!job->ok){
-         MessageBoxW(hwnd,L"Nie udało się pobrać aktualizacji. Spróbuj ponownie później.",L"Aktualizacja",MB_OK|MB_ICONERROR);
+         MessageBoxW(hwnd,T(L"Nie udało się pobrać aktualizacji. Spróbuj ponownie później."),T(L"Aktualizacja"),MB_OK|MB_ICONERROR);
          DeleteFileW(job->destPath.c_str());
          return 0;
       }
@@ -2627,7 +2639,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){
       if(update::launchSelfUpdate(job->destPath,exePath)){
          DestroyWindow(hwnd);            // the game is saved on exit; the helper swaps the exe and starts it again
       } else {
-         MessageBoxW(hwnd,L"Pobrano aktualizację, ale nie udało się jej zainstalować automatycznie.",L"Aktualizacja",MB_OK|MB_ICONERROR);
+         MessageBoxW(hwnd,T(L"Pobrano aktualizację, ale nie udało się jej zainstalować automatycznie."),T(L"Aktualizacja"),MB_OK|MB_ICONERROR);
       }
       return 0;}
    case WM_ENDSESSION: if(wp) { saveGame(); saveSettings(); } return 0;
@@ -2660,9 +2672,11 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
    timeBeginPeriod(1);
    CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED|COINIT_DISABLE_OLE1DDE);
    if(FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,&g_d2d))){
-      MessageBoxW(nullptr,L"Błąd inicjalizacji Direct2D.",L"Garibaldka",MB_ICONERROR); return 1; }
+      MessageBoxW(nullptr,T(L"Błąd inicjalizacji Direct2D."),L"Garibaldka",MB_ICONERROR); return 1; }
    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),(IUnknown**)&g_dw);
    CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&g_wic));
+   i18n::init(hInst);
+   if(cmdLine.find(L"/missing")!=std::wstring::npos) i18n::missLog()=_wfopen((i18n::exeDir()+L"i18n_missing.txt").c_str(),L"w, ccs=UTF-8");
    loadSettings();
 
    WNDCLASSEXW wc={sizeof(wc)};
@@ -2676,7 +2690,7 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
    std::wstring title=std::wstring(L"Garibaldka ")+APP_VERSION;
    HWND hwnd=CreateWindowExW(0,L"GaribaldkaWnd",title.c_str(),WS_OVERLAPPEDWINDOW,
       CW_USEDEFAULT,CW_USEDEFAULT,1180,860,nullptr,nullptr,hInst,nullptr);
-   if(!hwnd){ MessageBoxW(nullptr,L"Nie można utworzyć okna.",L"Garibaldka",MB_ICONERROR); return 1; }
+   if(!hwnd){ MessageBoxW(nullptr,T(L"Nie można utworzyć okna."),L"Garibaldka",MB_ICONERROR); return 1; }
    {  // restore window placement
       wchar_t buf[128]={}; auto ini=iniPath();
       GetPrivateProfileStringW(L"Window",L"Placement",L"",buf,128,ini.c_str());

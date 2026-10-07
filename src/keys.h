@@ -3,6 +3,7 @@
 #define UNICODE
 #include <windows.h>
 #include <string>
+#include "i18n.h"
 
 // Configurable keyboard shortcuts (settings window, group "Sterowanie"). Every action has two slots.
 // Fixed keys that are not configurable: Ctrl+Z (undo), Enter (chat), Esc (close a window), F6/F9/F10/F11 (debug aids).
@@ -39,7 +40,7 @@ static std::wstring vkName(DWORD vk){
    if(!vk) return L"—";
    switch(vk){
       case VK_LEFT: return L"←";   case VK_RIGHT: return L"→";   case VK_UP: return L"↑";   case VK_DOWN: return L"↓";
-      case VK_ESCAPE: return L"Esc";   case VK_RETURN: return L"Enter";   case VK_SPACE: return L"Spacja";
+      case VK_ESCAPE: return L"Esc";   case VK_RETURN: return L"Enter";   case VK_SPACE: return T(L"Spacja");
       case VK_TAB: return L"Tab";   case VK_BACK: return L"Backspace";   case VK_DELETE: return L"Delete";
       case VK_INSERT: return L"Insert";   case VK_HOME: return L"Home";   case VK_END: return L"End";
       case VK_PRIOR: return L"PgUp";   case VK_NEXT: return L"PgDn";

@@ -79,3 +79,14 @@ Gra zapisuje każdą partię i każdy ruch (także komputera i przeciwnika w sie
 - **Hot seat** (F7): dwóch graczy przy jednym komputerze (Gracz 1 na dole, Gracz 2 na górze). Cofnąć można ruchy z własnej tury. Takie partie nie są liczone w statystykach.
 - **Statystyki** (F4): rozegrane i wygrane partie oraz % wygranych dla każdego poziomu komputera i dla gry przez sieć.
 - **Graj przez sieć** (F5): hasło serwera jest wpisane domyślnie.
+
+## Języki / Languages
+
+Wybór języka: Ustawienia → Ogólne → Język. Domyślnie gra używa języka systemu (polski albo angielski). The language is chosen in Settings → General; by default it follows the system language.
+
+Teksty są oddzielone od kodu. Językiem źródłowym jest polski: każdy tekst w kodzie to polski `msgid` w `T(L"...")`, a tłumaczenie to plik katalogu gettext (`.po`), po jednym na język. Angielski (`res/lang/en.po`) jest wbudowany w exe. The source language is Polish; every language is one gettext `.po` file (msgid = the Polish text, msgstr = the translation); English is built into the exe.
+
+- **Nowy język bez przebudowy / a new language without rebuilding:** put an `xx.po` file into a `lang` folder next to `Garibaldi.exe` (same format; the header gives `"Language: xx\n"` and `"Language-Name: ...\n"`). It appears in the language list. A file `lang\en.po` overrides single English texts. Edit it with any text editor or with Poedit.
+- **Teksty ze wstawkami / texts with values** are put together from fragments in the order of the translation (`{0}`, `{1}` in `i18n::fmt`).
+- **Brakujące tłumaczenia / missing translations:** run the game with `/missing`; the texts without a translation go to `i18n_missing.txt`.
+- **Dla programisty / for the developer:** `python tools/i18n_build.py` rebuilds `res/lang/en.po` from `tools/en_list.py` and checks that every text of the code has its translation; add a new text to the code and to the list in the same place in the order.
