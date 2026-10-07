@@ -5,3 +5,9 @@ garibaldi_dump*.txt
 garibaldka.html
 Garibaldi.exe
 /Sounds/
+
+# files made by the game next to the exe
+garibaldka_ruchy*.log*
+Garibaldi*.sav
+Garibaldi*.ini
+i18n_missing.txt
