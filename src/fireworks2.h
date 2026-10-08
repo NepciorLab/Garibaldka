@@ -14,10 +14,14 @@
 
 class Fireworks2{
 public:
-   void start(int w,int h){ m_active=true; m_w=w; m_h=h; m_rockets.clear(); m_parts.clear(); m_flashes.clear(); m_time=0; m_acc=0; m_next=0.05f; }
-   void stop(){ m_active=false; m_rockets.clear(); m_parts.clear(); m_flashes.clear(); }
+   void start(int w,int h){ m_active=true; m_w=w; m_h=h; m_rockets.clear(); m_parts.clear(); m_flashes.clear(); m_events.clear(); m_time=0; m_acc=0; m_next=0.05f; }
+   void stop(){ m_active=false; m_rockets.clear(); m_parts.clear(); m_flashes.clear(); m_events.clear(); }
    bool active() const { return m_active; }
    size_t particles() const { return m_parts.size(); }
+   // What the ears have to know: a rocket was launched (kind 0: it flies `flight` seconds, then bursts; x = 0..1 across the
+   // window) and a burst happened (kind 1; size = how many sparks). The game plays the whistles and the bangs at those moments.
+   struct Event{ int kind; float flight; float x; float size; };
+   std::vector<Event> takeEvents(){ std::vector<Event> e; e.swap(m_events); return e; }
 
    // advances the simulation by `dt` seconds (fixed internal steps of 1/60 s)
    void update(float dt,int w,int h){
@@ -87,7 +91,7 @@ private:
    struct Part{ float x,y,vx,vy,life,maxLife,r,g,b,drag,grav,bright,tw; bool glitter; float hx[14],hy[14]; int hn,hmax; };
    struct Rocket{ float x,y,vx,vy,ay,ty; float hx[20],hy[20]; int hn; float t,T; };
    struct Flash{ float x,y,t,maxT,r,g,b; };
-   std::vector<Part> m_parts; std::vector<Rocket> m_rockets; std::vector<Flash> m_flashes;
+   std::vector<Part> m_parts; std::vector<Rocket> m_rockets; std::vector<Flash> m_flashes; std::vector<Event> m_events;
    bool m_active=false; int m_w=800,m_h=600,m_bw=0,m_bh=0; float m_time=0,m_acc=0,m_next=0;
    std::vector<float> m_acc3, m_b1, m_b2; std::vector<float> m_lut; int m_pal=0, m_burstNo=0; std::vector<float> m_hues;
    std::mt19937 m_rng{std::random_device{}()};
@@ -158,6 +162,7 @@ private:
       Rocket r; r.x=m_w*(0.12f+0.76f*rnd()); r.y=(float)m_h; r.ty=m_h*(0.10f+0.38f*rnd());
       r.T=0.85f+0.5f*rnd(); r.t=0.f; float dist=r.y-r.ty; r.vy=-2.f*dist/r.T; r.ay=-r.vy/r.T;
       r.vx=(rnd()-0.5f)*m_w*0.10f/r.T; r.hn=0; m_rockets.push_back(r);
+      m_events.push_back({0,r.T,r.x/(float)std::max(1,m_w),0.f});
    }
    void pushHist(Part& p){
       if(p.hn<p.hmax) p.hn++;
@@ -195,6 +200,7 @@ private:
          m_parts.push_back(p);
       }
       // glitter: dim sparks that drift down and twinkle for a long time
+      m_events.push_back({1,0.f,x/(float)std::max(1,m_w),(float)N});
       int G=120+(int)(rnd()*120);
       for(int i=0;i<G;i++){
          Part p; p.x=x; p.y=y; p.glitter=true; p.tw=rnd(); p.hn=0; p.hmax=1;

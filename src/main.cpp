@@ -53,7 +53,10 @@ static bool  g_muted=false;
 static int   g_volPct=100;
 static bool  g_hot=false;          // hot seat: two people at one computer, the player whose turn it is plays his side
 static int   g_gameLevel=1;        // the level this game was started with (for the statistics)
-static bool  g_autoMoves=true;     // a click on a card moves it to its best place
+static int   g_autoMode=0;         // a click on a card: 0 = moves it to its best place, 1 = only to a foundation, 2 = never
+static int   g_animStep=2;         // speed of the card animations: 0..4 = 25%, 50%, 100%, 200%, 400%
+static double g_animK=1.0;         // = 1 / speed: the durations of the card animations are multiplied by it
+static const double ANIM_SPEED[5]={0.25,0.5,1.0,2.0,4.0};
 static int   g_forceMode=0;        // foundation obligation: 0 = punish (the turn is lost), 1 = remind (the other action is blocked)
 static int   g_setGroup=0;         // the group last selected in the settings window
 static int   actor(){ return g_hot?g_game.turn:0; }       // the player at the controls
@@ -180,7 +183,7 @@ static double dealDelay(const Card& c,int pileId,int idx){
    case PT_TAB:  cat=4+red; k=(pileId-8)%4; break;
    default: break;
    }
-   return (start[cat]+k)*0.012;
+   return (start[cat]+k)*0.012*g_animK;
 }
 static void relayout(bool snap=false,bool dealing=false){
    double now=nowSec();
@@ -203,11 +206,11 @@ static void relayout(bool snap=false,bool dealing=false){
       if(moved){
          v.sx=v.x; v.sy=v.y; v.tx=tx; v.ty=ty;
          float dist=std::hypot(tx-v.x,ty-v.y);
-         v.t0=now+delay; v.dur=dealing?0.45:0.22+std::min(0.30f,dist/2400.f);
+         v.t0=now+delay; v.dur=(dealing?0.45:0.22+std::min(0.30f,dist/2400.f))*g_animK;
          moveEnd=std::max(moveEnd,v.t0+v.dur);
          v.fsrc=v.flip; v.ftgt=ftgt; v.couple=(v.flip!=ftgt);      // a card that turns over while moving: lifts and turns in the middle part
       } else if(ftgt!=v.ftgt){
-         v.fsrc=v.flip; v.ftgt=ftgt; v.couple=false; v.ft0=now; v.fdur=0.22;   // turns over in place (started later, see pendingFlips)
+         v.fsrc=v.flip; v.ftgt=ftgt; v.couple=false; v.ft0=now; v.fdur=0.22*g_animK;   // turns over in place (started later, see pendingFlips)
          pendingFlips.push_back(c.id);
       }
    };
@@ -321,11 +324,16 @@ static const double PREV_CYCLE=1.5, PREV_TOTAL=1.5;      // the hint move is sho
 // Opening animation: the winning (older) magazine card lifts, spins twice and flashes.
 struct StartAnim{ bool active=false; int cardId=-1; double t0=0; };
 static StartAnim g_start;
-static const double START_DUR=1.0, START_FLASH=0.2;
+static double START_DUR=1.0; static const double START_FLASH=0.2;
 // Tie at the start (identical magazine cards): hand cards are turned over pair by pair until one decides.
 struct RevealAnim{ bool active=false; std::vector<std::pair<int,int>> pairs; double t0=0; size_t launched=0; double hideAt=0; bool hidden=true; };
 static RevealAnim g_rev;
-static const double REV_STEP=0.75, REV_FLIGHT=0.5;
+static double REV_STEP=0.75, REV_FLIGHT=0.5;
+// The speed of the card animations (a setting). Only the cards: the flame, the fireworks and the windows are not affected.
+static void applyAnimSpeed(int step){
+   g_animStep=std::max(0,std::min(4,step)); g_animK=1.0/ANIM_SPEED[g_animStep];
+   START_DUR=1.0*g_animK; REV_STEP=0.75*g_animK; REV_FLIGHT=0.5*g_animK;
+}
 // The deal: one pile of both decks -> two piles (red, blue) -> cards fly to magazines, columns, hands -> magazine tops turn over.
 struct DealAnim{ bool active=false; int stage=0; double tSplit=0,tDeal=0,tFlip=0; };
 static DealAnim g_deal;
@@ -474,7 +482,8 @@ static void saveSettings(){
    WritePrivateProfileStringW(L"Network",L"Invite",g_inviteW.c_str(),ini.c_str());
    WritePrivateProfileStringW(L"Network",L"Secret",net::fromUtf8(g_secret).c_str(),ini.c_str());
    WritePrivateProfileStringW(L"Settings",L"Language",i18n::code().c_str(),ini.c_str());
-   wsprintfW(b,L"%d",g_autoMoves?1:0); WritePrivateProfileStringW(L"Settings",L"AutoMoves",b,ini.c_str());
+   wsprintfW(b,L"%d",g_autoMode); WritePrivateProfileStringW(L"Settings",L"AutoMode",b,ini.c_str());
+   wsprintfW(b,L"%d",g_animStep); WritePrivateProfileStringW(L"Settings",L"AnimSpeed",b,ini.c_str());
    wsprintfW(b,L"%d",g_forceMode);     WritePrivateProfileStringW(L"Settings",L"ForceObligation",b,ini.c_str());
    wsprintfW(b,L"%d",g_setGroup);      WritePrivateProfileStringW(L"Settings",L"LastGroup",b,ini.c_str());
    keysSave(ini); statsSave(ini);
@@ -498,7 +507,9 @@ static void loadSettings(){
    g_checkUpdates=GetPrivateProfileIntW(L"Settings",L"CheckUpdatesOnStart",1,ini.c_str())!=0;
    { wchar_t lb[16]={}; GetPrivateProfileStringW(L"Settings",L"Language",L"",lb,16,ini.c_str());
      if(!i18n::setLanguage(lb)) i18n::setLanguage(i18n::systemLanguageCode()); }         // none saved yet: the language of the system
-   g_autoMoves=GetPrivateProfileIntW(L"Settings",L"AutoMoves",1,ini.c_str())!=0;
+   g_autoMode=(int)GetPrivateProfileIntW(L"Settings",L"AutoMode",-1,ini.c_str());
+   if(g_autoMode<0||g_autoMode>2) g_autoMode=GetPrivateProfileIntW(L"Settings",L"AutoMoves",1,ini.c_str())!=0?0:2;     // the old on/off setting
+   applyAnimSpeed((int)GetPrivateProfileIntW(L"Settings",L"AnimSpeed",2,ini.c_str()));
    g_forceMode=GetPrivateProfileIntW(L"Settings",L"ForceObligation",0,ini.c_str())==1?1:0;
    g_setGroup=(int)GetPrivateProfileIntW(L"Settings",L"LastGroup",0,ini.c_str()); if(g_setGroup<0||g_setGroup>4) g_setGroup=0;
    g_hot=GetPrivateProfileIntW(L"Game",L"HotSeat",0,ini.c_str())!=0;                      // of the saved game
@@ -648,7 +659,7 @@ static void dealTick(double now){
    }
    if(g_deal.stage==2 && now>=g_deal.tFlip){           // the top magazine cards of both players turn over at the same time
       g_deal.stage=3; g_deal.active=false;
-      for(int id:g_dealTops){ Vis& v=V[id]; v.fsrc=v.flip; v.ftgt=1.f; v.couple=false; v.ft0=now; v.fdur=0.35; }
+      for(int id:g_dealTops){ Vis& v=V[id]; v.fsrc=v.flip; v.ftgt=1.f; v.couple=false; v.ft0=now; v.fdur=0.35*g_animK; }
       snd("click"); g_dirty=true;
    }
 }
@@ -675,8 +686,8 @@ static void newGameStart(bool network=false,uint32_t netSeed=0){
    }
    double now=nowSec();
    g_deal.active=true; g_deal.stage=0;
-   g_deal.tSplit=now+0.4; g_deal.tDeal=g_deal.tSplit+0.95; g_deal.tFlip=g_deal.tDeal+1.85;
-   double D=g_deal.tFlip+0.6;                           // the deal is over and the magazine tops are turned over
+   g_deal.tSplit=now+0.4*g_animK; g_deal.tDeal=g_deal.tSplit+0.95*g_animK; g_deal.tFlip=g_deal.tDeal+1.85*g_animK;
+   double D=g_deal.tFlip+0.6*g_animK;                           // the deal is over and the magazine tops are turned over
    // The card that decides who starts lifts, spins twice and flashes. With identical magazine cards the hand
    // cards are turned over first (pair after pair); the shown cards go under the hands afterwards.
    g_rev.pairs=g_game.startReveals;
@@ -956,7 +967,7 @@ static void netTick(double now){
    if(g_net.inbox.empty()||now<g_dealUntil||now<g_aiAt||uiBusy(now)) return;
    std::string l=g_net.inbox.front(); g_net.inbox.pop_front();
    netApply(l);
-   if(g_net.playing) g_aiAt=now+(l[0]=='M'?0.60:0.55);
+   if(g_net.playing) g_aiAt=now+(l[0]=='M'?0.60:0.55)*std::min(1.0,g_animK);
 }
 
 static void endHumanTurnIfSwitched(){
@@ -992,7 +1003,7 @@ static void loseTurnForForgetting(const Move& m){
    relayout(); g_dirty=true;
    if(g_game.over){ onGameOver(); return; }
    endHumanTurnIfSwitched();
-   snd("nono");
+   snd("fundament");
    if(g_hot) setStatus(hotName(who)+T(L" zapomniał dołożyć karty do fundamentu: traci turę!"),true,4);
    else setStatus(T(L"Zapomniałeś dołożyć karty do fundamentu: tracisz turę!"),true,4);
 }
@@ -1000,7 +1011,7 @@ static void loseTurnForForgetting(const Move& m){
 // Setting "Przypomnij": nothing happens except that the forced move is shown, so the player has to make it.
 static void obligationBlocked(const Move& must){
    if(effForce()==1){
-      startPreview(must); snd("nono"); relayout(); g_dirty=true;
+      startPreview(must); snd("fundament"); relayout(); g_dirty=true;
       setStatus(T(L"Przymus: ta karta musi najpierw trafić na fundament."),true,4);
       return;
    }
@@ -1076,10 +1087,14 @@ static void autoClick(int pile){
    }
    const Card* c=g_game.srcTop(pile,a);
    if(!c) return;
-   if(!g_autoMoves){ setStatus(T(L"Automatyczne ruchy są wyłączone (Ustawienia → Rozgrywka): przeciągnij kartę."),false,3); return; }
+   if(g_autoMode==2){ setStatus(T(L"Automatyczne ruchy są wyłączone (Ustawienia → Rozgrywka): przeciągnij kartę."),false,3); return; }
    // Best of ALL legal moves (see bestClickMove). Only when there is none: the turned card goes to the waste pile.
    Move best;
-   if(bestClickMove(g_game,pile,best,a)){ humanMove(best.src,best.dst); return; }
+   if(bestClickMove(g_game,pile,best,a)){
+      if(g_autoMode==1 && ptype(best.dst)!=PT_FND){ setStatus(T(L"Kliknięcie przenosi kartę tylko na fundament (Ustawienia → Rozgrywka): przeciągnij kartę."),false,3); return; }
+      humanMove(best.src,best.dst); return;
+   }
+   if(g_autoMode==1){ setStatus(T(L"Kliknięcie przenosi kartę tylko na fundament (Ustawienia → Rozgrywka): przeciągnij kartę."),false,3); return; }
    if(pile==turnedId(a)){ humanDiscard(); return; }
    snd("nono"); setStatus(T(L"Ta karta nie ma żadnego dozwolonego ruchu."),true,2.5);
 }
@@ -1190,6 +1205,31 @@ static void countPill(int id){
    txt(std::to_wstring(n),px,py,w,h,12,1,1,1,1,true);
 }
 
+// The sounds of the fireworks follow the animation: a launched rocket whistles - one of five whistles that fits into its flight is
+// chosen and started so that it ends at the burst - and every burst bangs (one of five bangs), panned to where it is.
+struct SndAt{ double at; int idx; float vol, pan; };
+static std::vector<SndAt> g_sndQ;
+static FILE* g_fwLog=nullptr;                      // /fwlog: when each whistle and bang of the fireworks was scheduled and played (to check the timing)
+static const double WHISTLE_LEN[SOUND_VARIANTS]={0.86,0.96,1.07,1.23,1.39};      // seconds (res/sounds/swist1..5.wav)
+static void fireworksSounds(double now){
+   static std::mt19937 rng{std::random_device{}()};
+   for(const Fireworks2::Event& e:g_fw.takeEvents()){
+      const float pan=(e.x-0.5f)*1.6f;
+      if(e.kind==0){
+         int cand[SOUND_VARIANTS], n=0; for(int i=0;i<SOUND_VARIANTS;i++) if(WHISTLE_LEN[i]<=e.flight+0.03) cand[n++]=i;
+         const int v= n>0 ? cand[rng()%n] : 0;
+         g_sndQ.push_back({now+std::max(0.0,e.flight-WHISTLE_LEN[v]),SOUND_WHISTLE0+v,0.55f,pan});
+         if(g_fwLog) fprintf(g_fwLog,"%.3f launch: flight %.2f s, whistle %d (%.2f s) starts at +%.2f s\n",now,e.flight,v+1,WHISTLE_LEN[v],std::max(0.0,e.flight-WHISTLE_LEN[v]));
+      } else {
+         g_sndQ.push_back({now,SOUND_BANG0+(int)(rng()%SOUND_VARIANTS),0.62f+0.38f*std::min(1.f,e.size/850.f),pan});
+      }
+   }
+   if(!g_fw.active()) g_sndQ.clear();
+   for(size_t i=0;i<g_sndQ.size();){
+      if(now>=g_sndQ[i].at){ if(g_fwLog){ fprintf(g_fwLog,"%.3f play slot %d\n",now,g_sndQ[i].idx); fflush(g_fwLog); } if(!g_muted) SoundSystem::instance().playIdx(g_sndQ[i].idx,g_sndQ[i].vol*g_volPct/100.f,g_sndQ[i].pan); g_sndQ.erase(g_sndQ.begin()+i); }
+      else i++;
+   }
+}
 static void drawFireworks(){
    if(!g_fw.active()||!g_rt) return;
    const float rs=0.6f;                                                    // the image is drawn at 60% size and stretched (it is soft anyway)
@@ -1504,7 +1544,7 @@ enum { HK_H=1, HK_P=2, HK_B=3, HK_NOTE=4 };      // heading, paragraph, bullet (
 struct HelpItem{ int kind; const wchar_t* lead; const wchar_t* text; };
 static const HelpItem HELP_DOC[]={
  {HK_H,nullptr,L"Cel gry"},
- {HK_P,nullptr,L"Jako pierwszy pozbądź się wszystkich swoich kart: z magazynu, z talii i ze śmietnika. Samo opróżnienie magazynu nie wystarcza."},
+ {HK_P,nullptr,L"Jako pierwszy pozbądź się wszystkich swoich kart: z magazynu, z talii i ze śmietnika."},
 
  {HK_H,nullptr,L"Rozkład kart"},
  {HK_P,nullptr,L"Każdy gracz ma własną talię 52 kart (Ty niebieską, komputer czerwoną)."},
@@ -1733,14 +1773,14 @@ static std::wstring clipboardText(){
 // clickable areas while they are drawn, the next mouse click looks them up.
 // ============================================================================
 struct SHit{ float x,y,w,h; int kind,a; };
-enum { SH_CLOSE=1, SH_LANG, SH_GROUP, SH_CHECK, SH_LEVEL, SH_FORCE, SH_SLIDER, SH_SBROWSE, SH_SPLAY, SH_SMUTE, SH_SDEF, SH_KEY, SH_KEYCLR, SH_KEYDEF, SH_STATRESET };
-struct SetUi{ bool open=false; int capture=-1; bool dragSlider=false; float sx=0, sw=1; std::vector<SHit> hits; };
+enum { SH_CLOSE=1, SH_LANG, SH_AUTO, SH_ANIM, SH_GROUP, SH_CHECK, SH_LEVEL, SH_FORCE, SH_SLIDER, SH_SBROWSE, SH_SPLAY, SH_SMUTE, SH_SDEF, SH_KEY, SH_KEYCLR, SH_KEYDEF, SH_STATRESET };
+struct SetUi{ bool open=false; int capture=-1; bool dragSlider=false, dragAnim=false; float sx=0, sw=1, ax=0, aw=1; std::vector<SHit> hits; };
 static SetUi g_set;
 struct StatUi{ bool open=false; std::vector<SHit> hits; };
 static StatUi g_stat;
 static const wchar_t* SET_GROUPS[5]={L"Ogólne",L"Rozgrywka",L"Grafika",L"Dźwięk",L"Sterowanie"};
 
-static void closeOverlays(){ g_help.open=false; g_help.dragThumb=false; g_np.open=false; g_set.open=false; g_set.capture=-1; g_set.dragSlider=false; g_stat.open=false; g_dirty=true; }
+static void closeOverlays(){ g_help.open=false; g_help.dragThumb=false; g_np.open=false; g_set.open=false; g_set.capture=-1; g_set.dragSlider=false; g_set.dragAnim=false; g_stat.open=false; g_dirty=true; }
 static void showSettings(){ bool was=g_set.open; closeOverlays(); g_set.open=!was; }
 static void showStats(){ bool was=g_stat.open; closeOverlays(); g_stat.open=!was; }
 
@@ -1871,8 +1911,14 @@ static void settingsDraw(){
       txt(T(L"Poziom gry (komputer)"),cx,y,260,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
       uiButton(g_set.hits,cx+270,y,220,36,std::wstring(T(L"Poziom: "))+levelName(g_level),SH_LEVEL,0);
       y+=44; uiNote(T(L"Kliknij przycisk, żeby zmienić poziom. Poziomy różnią się tym, ile ruchów naprzód komputer przewiduje: Łatwy 1, Normalny 2, Trudny 4. Żaden nie pomija ruchów."),cx,y,cw,44); y+=62;
-      uiCheck(g_set.hits,cx,y,cw,T(L"Automatyczne ruchy"),g_autoMoves,2); y+=34;
-      uiNote(T(L"Kliknięcie karty przenosi ją na najlepsze miejsce (kliknięcie karty w kolumnie przenosi cały sekwens). Po wyłączeniu kartę można przenosić tylko przeciąganiem; kliknięcie własnej talii nadal dobiera kartę."),cx+32,y,cw-32,62); y+=80;
+      txt(T(L"Automatyczne ruchy"),cx,y,200,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
+      uiButton(g_set.hits,cx+210,y,96,36,T(L"Zawsze"),SH_AUTO,0,g_autoMode==0);
+      uiButton(g_set.hits,cx+314,y,176,36,T(L"Tylko na fundament"),SH_AUTO,1,g_autoMode==1);
+      uiButton(g_set.hits,cx+498,y,90,36,T(L"Nigdy"),SH_AUTO,2,g_autoMode==2);
+      y+=44;
+      uiNote(g_autoMode==0 ? T(L"Kliknięcie karty przenosi ją na najlepsze miejsce (kliknięcie karty w kolumnie przenosi cały sekwens). Inne ruchy możesz też wykonywać przeciągając.")
+           : g_autoMode==1 ? T(L"Kliknięcie karty przenosi ją tylko na fundament. Pozostałe ruchy wykonujesz przeciągając; kliknięcie własnej talii nadal dobiera kartę.")
+           : T(L"Karty przenosi się tylko przeciąganiem; kliknięcie własnej talii nadal dobiera kartę."),cx,y,cw,62); y+=76;
       txt(T(L"Przymus fundamentu"),cx,y,260,36,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
       const bool twoPlayers=g_hot||g_net.playing;                            // with another person the penalty always applies
       uiButton(g_set.hits,cx+270,y,120,36,T(L"Karaj"),SH_FORCE,0,effForce()==0);
@@ -1884,9 +1930,23 @@ static void settingsDraw(){
          ? T(L"Karaj: kto pominie ruch na fundament, natychmiast traci turę, a jego zagranie nie zostaje wykonane.")
          : T(L"Przypomnij: zamiast kary gra pokazuje obowiązkowy ruch na fundament i blokuje zagranie, które chciałeś wykonać. Dopóki go nie zrobisz, nie zagrasz niczego innego."),cx,y,cw,62);
       break;}
-   case 2:                                                                   // Graphics (empty for now)
-      uiNote(T(L"Na razie brak ustawień grafiki."),cx,y,cw,24);
-      break;
+   case 2:{                                                                  // Graphics: the speed of the card animations
+      txt(T(L"Prędkość animacji kart"),cx,y,cw,30,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING); y+=44;
+      g_set.ax=cx+28.f; g_set.aw=cw-56.f;
+      rrect(g_set.ax,y+11,g_set.aw,6,3,1,1,1,0.20f);
+      rrect(g_set.ax,y+11,g_set.aw*g_animStep/4.f,6,3,1.f,0.86f,0.30f,0.95f);
+      for(int k=0;k<5;k++){                                                   // five stops: 25%, 50%, 100% (the default), 200%, 400%
+         float px=g_set.ax+g_set.aw*k/4.f; bool on=(k==g_animStep);
+         rrect(px-1.5f,y+6,3,16,1.5f,1,1,1,0.45f);
+         wchar_t lab[8]; wsprintfW(lab,L"%d%%",(int)(ANIM_SPEED[k]*100.0+0.5));
+         txt(lab,px-40,y+28,80,24,14,on?1.f:0.8f,on?0.9f:0.9f,on?0.4f:0.8f,1.f,on);
+      }
+      { float kx=g_set.ax+g_set.aw*g_animStep/4.f; D2D1_ELLIPSE e=D2D1::Ellipse(D2D1::Point2F(kx,y+14),10.f,10.f);
+        ID2D1SolidColorBrush* br=nullptr; g_rt->CreateSolidColorBrush(D2D1::ColorF(1.f,0.93f,0.55f,1.f),&br); if(br){ g_rt->FillEllipse(e,br); br->Release(); } }
+      uiHit(g_set.hits,g_set.ax-24,y-4,g_set.aw+48,48,SH_ANIM);
+      y+=70;
+      uiNote(T(L"Dotyczy wyłącznie animacji kart (przesuwanie, odwracanie, rozdawanie). Domyślnie 100%."),cx,y,cw,44);
+      break;}
    case 3:{                                                                  // Sound
       uiCheck(g_set.hits,cx,y,cw,T(L"Dźwięk włączony"),!g_muted,1); y+=40;
       txt(T(L"Głośność"),cx,y,100,30,15,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
@@ -1899,7 +1959,7 @@ static void settingsDraw(){
       txt(std::to_wstring(g_volPct)+L"%",cx+cw-60,y,60,30,15,1,1,1,1.f,false,DWRITE_TEXT_ALIGNMENT_TRAILING);
       y+=44;
       txt(T(L"Własne dźwięki (WAV lub MP3)"),cx,y,cw,26,15,1.f,0.86f,0.30f,1.f,true,DWRITE_TEXT_ALIGNMENT_LEADING); y+=32;
-      for(int i=0;i<SOUND_COUNT;i++,y+=38){
+      for(int i=0;i<SOUND_COUNT;i++){ if(!SOUND_VISIBLE[i]) continue;
          const bool mut=SoundSystem::instance().isMuted(i); const std::wstring& cp=SoundSystem::instance().customPath(i);
          txt(T(SOUND_LABELS[i]),cx,y,190,32,14.5f,0.95f,0.97f,0.95f,1.f,false,DWRITE_TEXT_ALIGNMENT_LEADING);
          std::wstring cur=mut?T(L"(bez dźwięku)"):cp.empty()?T(L"domyślny"):fileBase(cp);
@@ -1910,6 +1970,7 @@ static void settingsDraw(){
          uiButton(g_set.hits,bx+76,y+1,36,30,L"▶",SH_SPLAY,i,false,!mut,13.f);
          uiButton(g_set.hits,bx+116,y+1,36,30,L"✕",SH_SMUTE,i,mut,true,13.f);
          uiButton(g_set.hits,bx+156,y+1,36,30,L"↺",SH_SDEF,i,false,mut||!cp.empty(),13.f);
+         y+=38;
       }
       break;}
    case 4:{                                                                  // Controls
@@ -1929,6 +1990,7 @@ static void settingsDraw(){
       break;}
    }
 }
+static void settingsSetAnim(float mx);
 static void settingsSetVolume(float mx){
    float v=(mx-g_set.sx)/std::max(1.f,g_set.sw)*100.f;
    g_volPct=std::max(0,std::min(100,(int)std::lround(v))); g_dirty=true;
@@ -1941,11 +2003,12 @@ static void settingsMouseDown(float mx,float my){
       switch(h.kind){
       case SH_CLOSE: showSettings(); return;
       case SH_GROUP: g_setGroup=h.a; saveSettings(); break;
+      case SH_AUTO:  g_autoMode=h.a; saveSettings(); break;
+      case SH_ANIM:  g_set.dragAnim=true; SetCapture(g_hwnd); settingsSetAnim(mx); break;
       case SH_LANG:  i18n::setLanguage(i18n::all()[h.a].code); g_help.builtW=-1; setStatus(T(L"Język zmieniony."),false,2.5); saveSettings(); break;
       case SH_CHECK:
          if(h.a==0) g_checkUpdates=!g_checkUpdates;
          else if(h.a==1){ g_muted=!g_muted; if(g_muted) SoundSystem::instance().fadeOutAll(100); else snd("click"); }
-         else if(h.a==2) g_autoMoves=!g_autoMoves;
          saveSettings(); break;
       case SH_LEVEL: g_level=(g_level+1)%3; saveSettings(); break;
       case SH_FORCE: g_forceMode=h.a; saveSettings(); break;
@@ -1975,9 +2038,14 @@ static void settingsMouseDown(float mx,float my){
    }
    if(mx<px||mx>px+pw||my<py||my>py+ph){ showSettings(); return; }                // a click outside the panel closes it
 }
-static void settingsMouseMove(float mx){ if(g_set.dragSlider) settingsSetVolume(mx); }
+static void settingsSetAnim(float mx){
+   int st=(int)std::lround((mx-g_set.ax)/std::max(1.f,g_set.aw)*4.f);
+   st=std::max(0,std::min(4,st)); if(st!=g_animStep){ applyAnimSpeed(st); relayout(); g_dirty=true; }
+}
+static void settingsMouseMove(float mx){ if(g_set.dragSlider) settingsSetVolume(mx); else if(g_set.dragAnim) settingsSetAnim(mx); }
 static void settingsMouseUp(){
    if(g_set.dragSlider){ g_set.dragSlider=false; ReleaseCapture(); saveSettings(); snd("click"); g_dirty=true; }
+   if(g_set.dragAnim){ g_set.dragAnim=false; ReleaseCapture(); saveSettings(); g_dirty=true; }
 }
 static void settingsKey(WPARAM k){
    if(g_set.capture>=0){
@@ -2558,7 +2626,7 @@ static void onLUp(int mx,int my){
       g_dragging=false; g_dragCard=-1; g_dragIds.clear(); g_dragTargets.clear();
       Vis& v=V[ids[0]];
       double now=nowSec();
-      for(int id:ids){ Vis& w=V[id]; w.sx=w.x; w.sy=w.y; w.t0=now; w.dur=0.18; }   // the cards keep flying from the drop point
+      for(int id:ids){ Vis& w=V[id]; w.sx=w.x; w.sy=w.y; w.t0=now; w.dur=0.18*g_animK; }   // the cards keep flying from the drop point
       if(!run){
          int dst=dropTarget(src,(float)mx,(float)my,v.x,v.y);
          if(dst>=0){ applyHumanTarget(src,dst); }
@@ -2590,7 +2658,7 @@ static void onLUp(int mx,int my){
    }
    int p=hitPile((float)mx,(float)my);
    if(p>=0 && p==g_drag.pile && humanTurn()){
-      if(g_drag.idx>=0){ if(g_autoMoves) autoSeq(p,g_drag.idx); else setStatus(T(L"Automatyczne ruchy są wyłączone (Ustawienia → Rozgrywka): przeciągnij kartę."),false,3); }   // click inside a column: move the sequence from that card
+      if(g_drag.idx>=0){ if(g_autoMode==0) autoSeq(p,g_drag.idx); else setStatus(g_autoMode==1?T(L"Kliknięcie przenosi kartę tylko na fundament (Ustawienia → Rozgrywka): przeciągnij kartę."):T(L"Automatyczne ruchy są wyłączone (Ustawienia → Rozgrywka): przeciągnij kartę."),false,3); }   // click inside a column: move the sequence from that card
       else if(g_drag.badRun){ snd("nono"); setStatus(T(L"To nie jest sekwens: przenosić można tylko ułożone karty (malejąco, na przemian kolory)."),true,3); }
       else autoClick(p);                                          // a plain click moves the card to its best place
    }
@@ -2608,7 +2676,7 @@ static void aiTick(double now){
    logf("ai",s.m.src,s.m.dst);
    snd("click");
    afterAnyMove();
-   g_aiAt=now+(s.kind==ST_MOVE?0.60:0.55);
+   g_aiAt=now+(s.kind==ST_MOVE?0.60:0.55)*std::min(1.0,g_animK);
    if(!g_game.over && g_game.turn==0){ g_ctx=AIContext(); statusForTurn(); }
 }
 
@@ -2736,6 +2804,7 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),(IUnknown**)&g_dw);
    CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&g_wic));
    i18n::init(hInst);
+   if(cmdLine.find(L"/fwlog")!=std::wstring::npos) g_fwLog=_wfopen((i18n::exeDir()+L"fireworks_sounds.log").c_str(),L"w");
    if(cmdLine.find(L"/missing")!=std::wstring::npos) i18n::missLog()=_wfopen((i18n::exeDir()+L"i18n_missing.txt").c_str(),L"w, ccs=UTF-8");
    loadSettings();
 
@@ -2792,6 +2861,7 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
         if(g_net.online&&g_ws.connected()&&now-lastPing>20.0){ g_ws.sendLine("#PING"); lastPing=now; } }
       aiTick(now);
       if(g_fw.active() && now-g_fwLast>=0.016){ g_fw.update((float)(now-g_fwLast),(int)G.w,(int)G.h); g_fwLast=now; g_dirty=true; }
+      fireworksSounds(now);
       bool flameBurning=g_flame.lit||g_flame.scale>0.01f||g_flame.igniteAt>0;
       bool anim=anyAnimating(now)||(g_set.open&&g_setGroup==0)||g_plan.active||g_dragging||g_prev.active||g_start.active||g_rev.active||g_deal.active||g_fw.active()||!g_emotes.empty()||(g_game.over&&g_overShown&&now-g_overAt<1.0);
       if(anim||g_dirty){ render(); if(!anim) continue; Sleep(1); }

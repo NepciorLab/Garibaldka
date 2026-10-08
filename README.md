@@ -89,4 +89,8 @@ Teksty są oddzielone od kodu. Językiem źródłowym jest polski: każdy tekst 
 - **Nowy język bez przebudowy / a new language without rebuilding:** put an `xx.po` file into a `lang` folder next to `Garibaldi.exe` (same format; the header gives `"Language: xx\n"` and `"Language-Name: ...\n"`). It appears in the language list. A file `lang\en.po` overrides single English texts. Edit it with any text editor or with Poedit.
 - **Teksty ze wstawkami / texts with values** are put together from fragments in the order of the translation (`{0}`, `{1}` in `i18n::fmt`).
 - **Brakujące tłumaczenia / missing translations:** run the game with `/missing`; the texts without a translation go to `i18n_missing.txt`.
-- **Dla programisty / for the developer:** `python tools/i18n_build.py` rebuilds `res/lang/en.po` from `tools/en_list.py` and checks that every text of the code has its translation; add a new text to the code and to the list in the same place in the order.
+- **Dla programisty / for the developer:** `python tools/i18n_build.py` rebuilds `res/lang/en.po` from `tools/en_dict.py` and checks that every text of the code has its translation; add a new text to the code and its translation to the dictionary.
+
+## Dźwięki fajerwerków / Fireworks sounds
+
+Gwizdy rakiet (`swist1-5.wav`) i wybuchy (`wybuch1-5.wav`) w `res/sounds` zrobiono z nagrania prawdziwego pokazu (narzędzia: `tools/mp3_to_wav.cpp`, `tools/fwanalyze.cpp`, `tools/fwsounds.py`). Przy starcie rakiety gra wybiera losowy gwizd, który mieści się w czasie jej lotu, i uruchamia go tak, by kończył się w chwili wybuchu; wybuch gra losowy huk, przesunięty w stereo zgodnie z położeniem. `/fwlog` zapisuje do `fireworks_sounds.log`, kiedy co zagrano.

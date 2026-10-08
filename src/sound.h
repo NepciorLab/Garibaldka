@@ -11,18 +11,24 @@
 #include <algorithm>
 #include <cmath>
 
-// Sound slot keys - 6 configurable actions (Garibaldka)
+// Sound slots. 0..6 and 8 are events the player can give an own sound (settings window); 7 (the flame moving) and
+// 9..18 (the rocket whistles and the bangs of the fireworks, one of five is chosen at random) are fixed.
 static const char* SOUND_KEYS[] = {
-   "nowa",    // 0 Nowa gra
-   "click",   // 1 Ruch karty
-   "sukces",  // 2 Wygrana
-   "koniec",  // 3 Przegrana / remis
-   "nono",    // 4 Ruch niemozliwy / naruszenie obowiazku
-   "podp",    // 5 Podpowiedz
-   "cofnij",  // 6 Cofniecie ruchu
-   "plomien", // 7 Przesuniecie plomienia (zmiana tury)
+   "nowa",      // 0  New game
+   "click",     // 1  Card move
+   "sukces",    // 2  Win
+   "koniec",    // 3  Loss / draw
+   "nono",      // 4  Impossible move
+   "podp",      // 5  Hint
+   "cofnij",    // 6  Undo
+   "plomien",   // 7  The flame moves (turn change)
+   "fundament", // 8  A foundation move was missed (the turn is lost / the move is blocked)
+   "swist1", "swist2", "swist3", "swist4", "swist5",        // 9..13   whistles of the rockets
+   "wybuch1", "wybuch2", "wybuch3", "wybuch4", "wybuch5",   // 14..18  bangs of the bursts
 };
-static const int SOUND_COUNT = 8;
+static const int SOUND_COUNT = 19;
+static const int SOUND_WHISTLE0 = 9, SOUND_BANG0 = 14, SOUND_VARIANTS = 5;
+static const bool SOUND_VISIBLE[SOUND_COUNT] = { true,true,true,true,true,true,true,false,true, false,false,false,false,false,false,false,false,false,false };
 static const wchar_t* SOUND_LABELS[] = {
    L"Nowa gra",
    L"Ruch karty",
@@ -32,6 +38,8 @@ static const wchar_t* SOUND_LABELS[] = {
    L"Podpowiedź",
    L"Cofnięcie ruchu",
    L"Przesunięcie płomienia",
+   L"Pominięty ruch na fundament",
+   L"", L"", L"", L"", L"", L"", L"", L"", L"", L"",
 };
 static const wchar_t* SOUND_DEFAULTS[] = {
    L"nowa.wav",
@@ -42,6 +50,9 @@ static const wchar_t* SOUND_DEFAULTS[] = {
    L"podpowiedz.wav",
    L"cofnij.wav",
    L"plomien.wav",
+   L"fundament.wav",
+   L"swist1.wav", L"swist2.wav", L"swist3.wav", L"swist4.wav", L"swist5.wav",
+   L"wybuch1.wav", L"wybuch2.wav", L"wybuch3.wav", L"wybuch4.wav", L"wybuch5.wav",
 };
 
 // WAV file header parsing
@@ -165,7 +176,8 @@ public:
          if(strcmp(SOUND_KEYS[i], key) == 0) { playIdx(i, volume); return; }
    }
 
-   void playIdx(int idx, float volume = 1.0f) {
+   // pan: -1 (left) .. 1 (right)
+   void playIdx(int idx, float volume = 1.0f, float pan = 0.f) {
       if(idx < 0 || idx >= SOUND_COUNT || volume < 0.01f) return;
       SoundSlot& s = m_slots[idx];
       if(s.muted) return; // user chose "no sound" for this event
@@ -178,6 +190,7 @@ public:
          }
          LONG dsVol = volFracToDs(volume);
          dup->SetVolume(dsVol);
+         dup->SetPan((LONG)(std::max(-1.f, std::min(1.f, pan)) * 2500.f));
          dup->SetCurrentPosition(0);
          dup->Play(0, 0, 0);
          m_dups.push_back(dup);
