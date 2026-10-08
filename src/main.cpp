@@ -542,6 +542,51 @@ static void applySoundSettings(){                          // own sounds and mut
 // ============================================================================
 static bool uiBusy(double now){ return anyAnimating(now)||g_prev.active||g_start.active||g_rev.active||g_deal.active; }
 
+// ---------------------------------------------------------------------------
+// A won game: the cards are blown off the table by a wind. The cards on top of every pile start falling first; as soon as a
+// card has moved 100 px, the card under it starts (the ones deeper than the 7th go together). The cards drift with the wind,
+// flutter and turn as they fall and disappear below the bottom edge of the window. Only then the fireworks begin.
+// ---------------------------------------------------------------------------
+struct BlowCard{ bool live=false, started=false, gone=false; int above=-1; double startAt=0; float x=0,y=0,vx=0,vy=0,ang=0,spin=0,g=0,phase=0; };
+struct BlowAnim{ bool active=false, done=false; double last=0; BlowCard c[104]; };
+static BlowAnim g_blow;
+static void startBlow(){
+   static std::mt19937 rng{std::random_device{}()};
+   auto rnd=[&](){ return (float)(rng()%10000)/10000.f; };
+   const double now=nowSec();
+   g_blow=BlowAnim(); g_blow.active=true; g_blow.last=now;
+   for(int pile=0;pile<NP;pile++){
+      std::vector<int> ids; for(int id=0;id<104;id++) if(V[id].placed&&V[id].pile==pile) ids.push_back(id);
+      std::sort(ids.begin(),ids.end(),[](int a,int b){ return V[a].z>V[b].z; });                    // from the top card down
+      for(size_t d=0;d<ids.size();d++){
+         BlowCard& b=g_blow.c[ids[d]];
+         b.live=true; b.above= d==0 ? -1 : ids[std::min<size_t>(d-1,6)];
+         b.startAt=now+(d==0?0.05+0.35*rnd():0.0);
+         b.g=2800.f+800.f*rnd(); b.spin=(rnd()<0.5f?-1.f:1.f)*(1.5f+4.5f*rnd()); b.phase=rnd()*6.2832f; b.vy=40.f;
+      }
+   }
+}
+
+static bool blowTick(double now){
+   if(!g_blow.active) return false;
+   const float dt=(float)std::min(0.05,std::max(0.0,now-g_blow.last)); g_blow.last=now;
+   const float sc=G.w/1180.f; bool allGone=true;
+   for(int id=0;id<104;id++){
+      BlowCard& b=g_blow.c[id]; if(!b.live||b.gone) continue;
+      allGone=false;
+      if(!b.started){
+         bool go= b.above<0 ? now>=b.startAt : (g_blow.c[b.above].started && std::hypot(g_blow.c[b.above].x,g_blow.c[b.above].y)>=100.f);
+         if(!go) continue;
+         b.started=true;
+      }
+      const float wind=(230.f+130.f*std::sin((float)now*1.3f+b.phase))*sc;                 // a gusty wind from the left
+      b.vx+=(wind-b.vx)*1.7f*dt; b.vy+=b.g*dt;
+      b.x+=b.vx*dt+std::sin((float)now*8.f+b.phase)*34.f*dt; b.y+=b.vy*dt;                // it flutters sideways
+      b.ang+=b.spin*dt*(0.35f+std::min(1.f,b.y/220.f));
+      if(V[id].y+b.y>G.h+G.ch*1.4f) b.gone=true;
+   }
+   return allGone;
+}
 // Online: tell the server how this game ended for me (it counts a result only when both players report the same).
 static void netReportResult(){
    if(!g_net.playing||!g_net.online) return;
@@ -558,10 +603,10 @@ static void onGameOver(){
       st.games++; if(g_game.winner==0) st.wins++; else if(g_game.winner<0) st.draws++;
       saveSettings();
    }
-   if(g_hot && g_game.winner>=0){ snd("sukces"); g_fw.start((int)G.w,(int)G.h); g_fwLast=nowSec();
+   if(g_hot && g_game.winner>=0){ snd("sukces"); startBlow();
       setStatus(hotName(g_game.winner)+(all?T(L" wygrywa: pozbył się wszystkich kart!"):T(L" wygrywa: po 400 turach ma mniej kart do zagrania.")));
    }
-   else if(g_game.winner==0){ snd("sukces"); g_fw.start((int)G.w,(int)G.h); g_fwLast=nowSec();
+   else if(g_game.winner==0){ snd("sukces"); startBlow();
       setStatus(all?T(L"Wygrywasz! Pozbyłeś się wszystkich kart."):T(L"Wygrywasz! Po 400 turach masz mniej kart do zagrania.")); }
    else if(g_game.winner==1){ snd("koniec");
       setStatus(all?oppName()+T(L" pozbył się wszystkich kart. Przegrana."):T(L"Po 400 turach ")+oppName()+T(L" ma mniej kart do zagrania. Przegrana.")); }
@@ -667,7 +712,7 @@ static bool g_forceTie=false;     // debug key F11
 static std::vector<Game> g_hist;  // snapshots for undo (one before every action of the player)
 static void newGameStart(bool network=false,uint32_t netSeed=0){
    SoundSystem::instance().fadeOutAll(150);
-   g_fw.stop(); g_overShown=false; g_prev.active=false; g_start.active=false; g_rev.active=false; g_deal.active=false;
+   g_fw.stop(); g_blow.active=false; g_blow.done=false; g_overShown=false; g_prev.active=false; g_start.active=false; g_rev.active=false; g_deal.active=false;
    g_drag=decltype(g_drag)(); g_dragging=false; g_plan.active=false; g_hist.clear();
    if(network){                                     // both computers deal the same game from the same seed
       g_game.newGame(netSeed,false);
@@ -721,7 +766,7 @@ static void newGameStart(bool network=false,uint32_t netSeed=0){
 // Restores the game saved on exit. Returns false when there is no valid save.
 static bool loadSavedGame(){
    if(!readSavedGame()) return false;
-   g_fw.stop(); g_overShown=false; g_prev.active=false; g_start.active=false; g_rev.active=false; g_deal.active=false; g_drag=decltype(g_drag)(); g_dragging=false; g_plan.active=false; g_hist.clear();
+   g_fw.stop(); g_blow.active=false; g_blow.done=false; g_overShown=false; g_prev.active=false; g_start.active=false; g_rev.active=false; g_deal.active=false; g_drag=decltype(g_drag)(); g_dragging=false; g_plan.active=false; g_hist.clear();
    for(Vis& v:V) v=Vis();
    relayout(true);
    g_dealUntil=0; g_ctx=AIContext();
@@ -1057,7 +1102,7 @@ static bool canUndo(){
 static void undoMove(){
    if(!canUndo()) return;
    g_game=g_hist.back(); g_hist.pop_back();
-   g_ctx=AIContext(); g_overShown=false; g_fw.stop(); g_prev.active=false; g_start.active=false; g_rev.active=false;
+   g_ctx=AIContext(); g_overShown=false; g_fw.stop(); g_blow.active=false; g_blow.done=false; g_prev.active=false; g_start.active=false; g_rev.active=false;
    relayout(); g_dirty=true; snd("cofnij");
    statusForTurn();
 }
@@ -2360,10 +2405,21 @@ static void render(){
    };
    for(auto& it:items){
       const Vis& v=V[it.id];
+      if(g_blow.active||g_blow.done){
+         const BlowCard& b=g_blow.c[it.id];
+         if(b.gone||g_blow.done) continue;
+         if(b.started){                                                          // blown off: shifted and turned around the middle of the card
+            const float mx=std::floor(v.x)+G.cw*0.5f, my=std::floor(v.y)+G.ch*0.5f;
+            g_rt->SetTransform(D2D1::Matrix3x2F::Rotation(b.ang*57.29578f,D2D1::Point2F(mx,my))*D2D1::Matrix3x2F::Translation(b.x,b.y));
+            drawOne(it.id,std::floor(v.x),std::floor(v.y),false);
+            g_rt->SetTransform(D2D1::Matrix3x2F::Identity());
+            continue;
+         }
+      }
       drawOne(it.id,std::floor(v.x),std::floor(v.y),false);
    }
    // pile counters
-   for(int p=0;p<2;p++){ countPill(resId(p)); countPill(handId(p)); countPill(wasteId(p)); }
+   if(!g_blow.active&&!g_blow.done) for(int p=0;p<2;p++){ countPill(resId(p)); countPill(handId(p)); countPill(wasteId(p)); }
 
    // valid drop targets while a card is being dragged
    if(g_dragging && g_drag.idx>=0){
@@ -2860,10 +2916,11 @@ int WINAPI WinMain(HINSTANCE hInst,HINSTANCE,LPSTR,int nShow){
       { static double lastPing=0;                      // the server connection is kept alive (answered by the server with #PONG)
         if(g_net.online&&g_ws.connected()&&now-lastPing>20.0){ g_ws.sendLine("#PING"); lastPing=now; } }
       aiTick(now);
+      if(g_blow.active && blowTick(now)){ g_blow.active=false; g_blow.done=true; g_fw.start((int)G.w,(int)G.h); g_fwLast=now; g_dirty=true; }
       if(g_fw.active() && now-g_fwLast>=0.016){ g_fw.update((float)(now-g_fwLast),(int)G.w,(int)G.h); g_fwLast=now; g_dirty=true; }
       fireworksSounds(now);
       bool flameBurning=g_flame.lit||g_flame.scale>0.01f||g_flame.igniteAt>0;
-      bool anim=anyAnimating(now)||(g_set.open&&g_setGroup==0)||g_plan.active||g_dragging||g_prev.active||g_start.active||g_rev.active||g_deal.active||g_fw.active()||!g_emotes.empty()||(g_game.over&&g_overShown&&now-g_overAt<1.0);
+      bool anim=anyAnimating(now)||g_blow.active||(g_set.open&&g_setGroup==0)||g_plan.active||g_dragging||g_prev.active||g_start.active||g_rev.active||g_deal.active||g_fw.active()||!g_emotes.empty()||(g_game.over&&g_overShown&&now-g_overAt<1.0);
       if(anim||g_dirty){ render(); if(!anim) continue; Sleep(1); }
       else if(flameBurning){ render(); MsgWaitForMultipleObjects(0,nullptr,FALSE,12,QS_ALLINPUT); }   // only the flame moves: ~60 fps without a busy loop
       else MsgWaitForMultipleObjects(0,nullptr,FALSE,25,QS_ALLINPUT);
