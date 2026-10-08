@@ -32,7 +32,7 @@ class Client {
 }
 const login = async (nick, secret) => {
   const c = await new Client().open();
-  c.send(`#AUTH 1.2.3 ${nick} ${secret}${INVITE ? " " + INVITE : ""}`);
+  c.send(`#AUTH 1.2.4 ${nick} ${secret}${INVITE ? " " + INVITE : ""}`);
   return c;
 };
 
