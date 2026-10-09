@@ -601,6 +601,9 @@ msgstr "Moving the sequence in several moves…"
 msgid "Przenoszę kartę…"
 msgstr "Moving the card…"
 
+msgid "Odsłonięta karta musi najpierw trafić na fundament: przenoszenie sekwensu przerwane."
+msgstr "The uncovered card must go to a foundation first: moving the sequence was interrupted."
+
 msgid "Ten sekwens nie ma gdzie przejść (albo brakuje wolnego miejsca)."
 msgstr "This sequence has nowhere to go (or there is not enough free space)."
 

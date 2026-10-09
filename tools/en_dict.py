@@ -319,4 +319,5 @@ EN = {
     'Dotyczy wyłącznie animacji kart (przesuwanie, odwracanie, rozdawanie). Domyślnie 100%.': 'Applies only to the animation of the cards (moving, turning over, dealing). Default 100%.',
     'Jako pierwszy pozbądź się wszystkich swoich kart: z magazynu, z talii i ze śmietnika.': 'Be the first to get rid of all your cards: from the reserve, from the stock and from the waste pile.',
     'Pominięty ruch na fundament': 'Missed foundation move',
+    'Odsłonięta karta musi najpierw trafić na fundament: przenoszenie sekwensu przerwane.': 'The uncovered card must go to a foundation first: moving the sequence was interrupted.',
 }

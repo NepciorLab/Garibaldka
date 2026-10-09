@@ -145,6 +145,23 @@ int main(){
       char b[140]; sprintf(b,"level %d: no turn ended with a free column that could take a card (%d turns checked)",lvl,endings);
       CHECK(violations==0,b);
    }
+   // --- 2f. A free column is not wasted on a column card whose only gain is an uncovered card for the foundation: the
+   //         computer puts the turned card (a card of its own hand) there instead - on every level.
+   for(int lvl=0;lvl<=2;lvl++){
+      int good=0;
+      for(int i=0;i<50;i++){
+         Game g=empty(); g.turn=1; g.rng.seed(300+i);
+         g.pile[turnedId(1)]={mk(Hearts,4,1)};
+         g.pile[resId(0)]={mk(Hearts,9,0,false)};
+         g.pile[fndId(0)]={mk(Spades,1,0)};                                           // the spade foundation waits for the 2 of spades
+         g.pile[tabId(0)]={mk(Spades,2,0),mk(Clubs,9,0)};                              // the 9 of clubs covers it
+         for(int j=1;j<7;j++) g.pile[tabId(j)]={mk(Spades,7+j,1)};                      // (black on black: no moves) column 8 is free
+         AIContext cx;
+         for(int st=0;st<4&&g.turn==1;st++){ Step r=aiStep(g,1,cx,lvl); if(r.kind==ST_MOVE&&r.m.src==turnedId(1)&&r.m.dst==tabId(7)){ good++; break; } if(r.kind==ST_MOVE&&r.m.src==tabId(0)&&r.m.dst==tabId(7)) break; }
+      }
+      char b[150]; sprintf(b,"level %d: the free column takes the turned card, not the 9 of clubs that only uncovers a foundation card",lvl);
+      CHECK(good==50,b);
+   }
    // --- 3. Obligation: a turned ace is always played on the foundation (every level).
    for(int lvl=0;lvl<3;lvl++){
       Game g=empty();

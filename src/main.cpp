@@ -2590,6 +2590,16 @@ static void planTick(double now){
    if(!g_game.canMove(m.src,m.dst,actor())){ g_plan.active=false; relayout(); statusForTurn(); return; }   // cannot happen; stay safe
    humanMove(m.src,m.dst,false);
    g_plan.next++; g_plan.at=now+0.05;
+   // A step of the series uncovered a card that fits a foundation: the obligation applies at once, so the series stops here
+   // (the player puts that card on the foundation first and then goes on by hand).
+   if(!g_game.over && g_plan.next<g_plan.moves.size()){
+      Move must;
+      if(g_game.mandatory(actor(),must)){
+         g_plan.active=false; relayout(); startPreview(must); snd("nono");
+         setStatus(T(L"Odsłonięta karta musi najpierw trafić na fundament: przenoszenie sekwensu przerwane."),true,4);
+         return;
+      }
+   }
    if(g_plan.next>=g_plan.moves.size()) g_plan.active=false;
    else if(!g_game.over) setStatus(T(L"Przenoszę sekwens kolejnymi ruchami…"));
 }

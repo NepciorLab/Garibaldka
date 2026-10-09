@@ -424,7 +424,7 @@ inline float scoreMove(const Game& g,const Move& m,int p,const AIContext& ctx,in
       const auto& pl=g.pile[m.src];
       if(pl.size()>1 && !pl[pl.size()-2].up) sc+=80;
    }
-   if(dt==PT_FND && st!=PT_RES) sc+=300;
+   if(dt==PT_FND && st!=PT_RES) sc+= st==PT_TAB ? 200.f : 300.f;      // a column card on a foundation brings no card of mine closer to the end (a turned / waste card does)
    // 4: dig in the columns / 10: no loops
    if(st==PT_TAB){
       const auto& pl=g.pile[m.src];
@@ -452,6 +452,10 @@ inline float scoreMove(const Game& g,const Move& m,int p,const AIContext& ctx,in
          sc-=(float)g.pile[m.dst].size();
       } else {
          if(st==PT_RES) sc+=100; else if(c.rank==13) sc+=20; else sc-=60;
+         // A card from another column into the free place only uncovers a card: the place is used up and no card of mine is gone.
+         // That is worth it only when what it opens is worth a lot (the search sees that); otherwise the free column is for
+         // the cards of the hand, the magazine and the waste pile.
+         if(st==PT_TAB) sc-=200;
       }
       // A free column is worth keeping: when the card can also go onto another card, it goes there
       // (simulations: no difference in strength, but the click and the computer no longer waste the free place).
